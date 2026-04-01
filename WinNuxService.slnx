@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/samples/" />
+  <Folder Name="/samples/BasicSample/">
+    <Project Path="samples/BasicSample/Sample.Host/Sample.Host.csproj" />
+    <Project Path="samples/BasicSample/Sample.Plugin.External/Sample.Plugin.External.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/McpNetwork.WinNuxService/McpNetwork.WinNuxService.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/McpNetwork.WinNuxService.Tests/McpNetwork.WinNuxService.Tests.csproj" />
+  </Folder>
+</Solution>

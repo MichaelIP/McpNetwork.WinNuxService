@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="McpNetwork.SystemMetrics" Version="5.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\McpNetwork.WinNuxService\McpNetwork.WinNuxService.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="if not exist &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)&quot; mkdir &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)&quot;&#xD;&#xA;copy /Y &quot;$(TargetDir)*.dll&quot; &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)&quot;&#xD;&#xA;del &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)\McpNetwork.WinNuxService.dll&quot;&#xD;&#xA;REM dir &quot;$(TargetDir)*.dll&quot;&#xD;&#xA;REM echo  &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)&quot;" />
+  </Target>
+
+</Project>

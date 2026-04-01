@@ -1,0 +1,4 @@
+﻿[*.cs]
+
+# CA1848: Utiliser les délégués LoggerMessage
+dotnet_diagnostic.CA1848.severity = suggestion
