@@ -9,22 +9,34 @@
 	<PropertyGroup>
 		<Authors>Michael Parenti</Authors>
 		<Company>MCP-Network</Company>
+		<RootNamespace>McpNetwork.WinNuxService</RootNamespace>
+
+		<Copyright>2026</Copyright>
+		<Title>WinNux Service</Title>
+
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<RepositoryUrl>https://github.com/MichaelIP/McpNetwork.WinNuxService</RepositoryUrl>
+
+
+		<PackageId>McpNetwork.WinNuxService</PackageId>		
+		<Description>This nuget permits any .Net application to be run as a windows or linux service.</Description>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageTags>windows service,linux daemon,systemd</PackageTags>
-		<PackageId>McpNetwork.WinNuxService</PackageId>
-		<RootNamespace>McpNetwork.WinNuxService</RootNamespace>
-		<Description>This nuget permits any .Net application to be run as a windows or linux service.</Description>
-		<Version>11.1.1</Version>
-		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-		<Title>WinNux Service</Title>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
+		
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<AssemblyVersion>11.1.1.0</AssemblyVersion>
+		<FileVersion>11.1.1.0</FileVersion>
+		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+		<Version>11.1.1</Version>
+		<PackageProjectUrl>https://github.com/MichaelIP/McpNetwork.WinNuxService</PackageProjectUrl>
 	</PropertyGroup>
 
 	<ItemGroup>
-		<None Update="README.md">
-			<Pack>True</Pack>
-			<PackagePath>\</PackagePath>
-		</None>
+		<None Include="../../README.md" Pack="true" PackagePath="" />
 	</ItemGroup>
 
 	<ItemGroup>
