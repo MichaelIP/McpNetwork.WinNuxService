@@ -123,7 +123,8 @@ await host.StopAsync();
 ```
 
 * `RunAsync()` – runs the service host (blocking)
-* `StartAsync()` / `StopAsync()` – for finer control
+* `StartAsync()` – starts the host and **waits until all services have fully completed `OnStartAsync`** before returning
+* `StopAsync()` – stops the host, calling `OnStopAsync` on all services
 * `ConfigureServices(Action<IServiceProvider>)` – post-build configuration, for setup that requires the fully constructed service provider
 
 ```csharp
@@ -146,21 +147,32 @@ await host.RunAsync();
 
 ## Creating a Service Module
 
-Service modules implement `IWinNuxService`.
+Service modules implement `IWinNuxService`, which has two methods with distinct responsibilities:
+
+| Method | Token meaning | Purpose |
+|--------|--------------|---------|
+| `OnStartAsync(token)` | Abort startup | Called once at startup — complete quickly and return. Use it to initialise state and launch background work. |
+| `OnStopAsync(token)` | Abort shutdown | Called once when the host is stopping. Cancel background work and release resources. |
+
+> **Important:** the token passed to `OnStartAsync` is a *startup-abort* token — it signals that startup is taking too long, not that the service is stopping. Do **not** use it to drive a long-running loop. Use a `CancellationTokenSource` that you cancel in `OnStopAsync` instead.
 
 ```csharp
 public class TestService : IWinNuxService
 {
+    private readonly CancellationTokenSource _cts = new();
+
     public Task OnStartAsync(CancellationToken token)
     {
-        _ = RunLoop(token);
+        // Launch background work — do NOT pass token here
+        _ = RunLoop(_cts.Token);
         return Task.CompletedTask;
     }
 
-    public Task OnStopAsync(CancellationToken token)
+    public async Task OnStopAsync(CancellationToken token)
     {
+        // Signal the background loop to stop
+        await _cts.CancelAsync();
         Console.WriteLine("Service stopping");
-        return Task.CompletedTask;
     }
 
     private async Task RunLoop(CancellationToken token)
@@ -433,19 +445,20 @@ public class ConsoleMessenger : IMessenger
 public class HeartbeatService : IWinNuxService
 {
     private readonly IMessenger _messenger;
+    private readonly CancellationTokenSource _cts = new();
 
     public HeartbeatService(IMessenger messenger) { _messenger = messenger; }
 
     public Task OnStartAsync(CancellationToken token)
     {
-        _ = RunLoop(token);
+        _ = RunLoop(_cts.Token);
         return Task.CompletedTask;
     }
 
-    public Task OnStopAsync(CancellationToken token)
+    public async Task OnStopAsync(CancellationToken token)
     {
+        await _cts.CancelAsync();
         _messenger.Send("HeartbeatService stopping");
-        return Task.CompletedTask;
     }
 
     private async Task RunLoop(CancellationToken token)
@@ -465,19 +478,20 @@ public class HeartbeatService : IWinNuxService
 public class TimeService : IWinNuxService
 {
     private readonly IMessenger _messenger;
+    private readonly CancellationTokenSource _cts = new();
 
     public TimeService(IMessenger messenger) { _messenger = messenger; }
 
     public Task OnStartAsync(CancellationToken token)
     {
-        _ = RunLoop(token);
+        _ = RunLoop(_cts.Token);
         return Task.CompletedTask;
     }
 
-    public Task OnStopAsync(CancellationToken token)
+    public async Task OnStopAsync(CancellationToken token)
     {
+        await _cts.CancelAsync();
         _messenger.Send("TimeService stopping");
-        return Task.CompletedTask;
     }
 
     private async Task RunLoop(CancellationToken token)
