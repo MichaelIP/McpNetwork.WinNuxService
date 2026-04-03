@@ -18,18 +18,17 @@
 		<RepositoryType>git</RepositoryType>
 		<RepositoryUrl>https://github.com/MichaelIP/McpNetwork.WinNuxService</RepositoryUrl>
 
-
-		<PackageId>McpNetwork.WinNuxService</PackageId>		
+		<PackageId>McpNetwork.WinNuxService</PackageId>
 		<Description>This nuget permits any .Net application to be run as a windows or linux service.</Description>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageTags>windows service,linux daemon,systemd</PackageTags>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
-		
+
 	</PropertyGroup>
 
 	<PropertyGroup>
-		<AssemblyVersion>11.1.1.0</AssemblyVersion>
-		<FileVersion>11.1.1.0</FileVersion>
+		<AssemblyVersion>11.2.0.0</AssemblyVersion>
+		<FileVersion>11.2.0.0</FileVersion>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<Version>11.1.1</Version>
 		<PackageProjectUrl>https://github.com/MichaelIP/McpNetwork.WinNuxService</PackageProjectUrl>
@@ -38,6 +37,13 @@
 	<ItemGroup>
 		<None Include="../../README.md" Pack="true" PackagePath="" />
 	</ItemGroup>
+
+	<ItemGroup>
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+			<_Parameter1>McpNetwork.WinNuxService.Tests</_Parameter1>
+		</AssemblyAttribute>
+	</ItemGroup>
+
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />

@@ -1,15 +1,13 @@
-﻿using System;
-using System.Reflection;
+﻿using System.Reflection;
 using System.Runtime.Loader;
 
 namespace McpNetwork.WinNuxService.Plugins;
 
-internal class PluginLoadContext : AssemblyLoadContext
+public class PluginLoadContext : AssemblyLoadContext
 {
     private readonly AssemblyDependencyResolver _resolver;
 
-    public PluginLoadContext(string pluginPath)
-        : base(isCollectible: true)
+    public PluginLoadContext(string pluginPath) : base(isCollectible: true)
     {
         _resolver = new AssemblyDependencyResolver(pluginPath);
     }

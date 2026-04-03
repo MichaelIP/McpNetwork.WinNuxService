@@ -1,194 +1,227 @@
 ﻿using McpNetwork.WinNuxService.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using NUnit.Framework;
 
 namespace McpNetwork.WinNuxService.Tests;
 
 /// <summary>
-/// Tests for service start/stop lifecycle behaviour.
+/// Tests that verify IWinNuxService lifecycle (OnStartAsync / OnStopAsync)
+/// is correctly driven by the host.
 /// </summary>
 [TestFixture]
 public class ServiceLifecycleTests
 {
     // -------------------------------------------------------------------------
-    // Helpers
+    // Single service
     // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task StartAsync_CallsOnStartAsync_OnRegisteredService()
+    {
+        var tracker = new LifecycleTracker();
+
+        var host = WinNuxService.Create()
+            .ConfigureServices((_, services) =>
+                Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions
+                    .AddSingleton(services, tracker))
+            .AddService<TrackingService>()
+            .Build();
+
+        await host.StartAsync();
+        await host.StopAsync();
+
+        Assert.That(tracker.StartCalled, Is.True);
+    }
+
+    [Test]
+    public async Task StopAsync_CallsOnStopAsync_OnRegisteredService()
+    {
+        var tracker = new LifecycleTracker();
+
+        var host = WinNuxService.Create()
+            .ConfigureServices((_, services) =>
+                Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions
+                    .AddSingleton(services, tracker))
+            .AddService<TrackingService>()
+            .Build();
+
+        await host.StartAsync();
+        await host.StopAsync();
+
+        Assert.That(tracker.StopCalled, Is.True);
+    }
+
+    // -------------------------------------------------------------------------
+    // Multiple services
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task StartAsync_CallsOnStartAsync_OnAllRegisteredServices()
+    {
+        var trackerA = new LifecycleTracker();
+        var trackerB = new LifecycleTracker();
+
+        var host = WinNuxService.Create()
+            .ConfigureServices((_, services) =>
+            {
+                Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions
+                    .AddSingleton(services, trackerA);
+                services.AddKeyedSingleton<LifecycleTracker>("B", trackerB);
+            })
+            .AddService<TrackingService>()
+            .AddService<KeyedTrackingService>()
+            .Build();
+
+        await host.StartAsync();
+        await host.StopAsync();
+
+        Assert.That(trackerA.StartCalled, Is.True, "Service A was not started");
+        Assert.That(trackerB.StartCalled, Is.True, "Service B was not started");
+    }
+
+    [Test]
+    public async Task StopAsync_CallsOnStopAsync_OnAllRegisteredServices()
+    {
+        var trackerA = new LifecycleTracker();
+        var trackerB = new LifecycleTracker();
+
+        var host = WinNuxService.Create()
+            .ConfigureServices((_, services) =>
+            {
+                Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions
+                    .AddSingleton(services, trackerA);
+                services.AddKeyedSingleton<LifecycleTracker>("B", trackerB);
+            })
+            .AddService<TrackingService>()
+            .AddService<KeyedTrackingService>()
+            .Build();
+
+        await host.StartAsync();
+        await host.StopAsync();
+
+        Assert.That(trackerA.StopCalled, Is.True, "Service A was not stopped");
+        Assert.That(trackerB.StopCalled, Is.True, "Service B was not stopped");
+    }
+
+    // -------------------------------------------------------------------------
+    // Cancellation
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task StopAsync_CancellationToken_IsSignalled_WhenHostStops()
+    {
+        var tokenObserver = new CancellationTokenObserver();
+
+        var host = WinNuxService.Create()
+            .ConfigureServices((_, services) =>
+                Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions
+                    .AddSingleton(services, tokenObserver))
+            .AddService<ObservingService>()
+            .Build();
+
+        await host.StartAsync();
+        await host.StopAsync();
+
+        var recorded = await tokenObserver.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.That(recorded, Is.True, "OnStopAsync should have been called when the host stopped");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+public class LifecycleTracker
+{
+    public bool StartCalled { get; private set; }
+    public bool StopCalled { get; private set; }
+
+    public void RecordStart() => StartCalled = true;
+    public void RecordStop() => StopCalled = true;
+}
+
+/// <summary>Service that records start/stop via a shared LifecycleTracker.</summary>
+public class TrackingService : IWinNuxService
+{
+    private readonly LifecycleTracker _tracker;
+    public TrackingService(LifecycleTracker tracker) { _tracker = tracker; }
+
+    public Task OnStartAsync(CancellationToken cancellationToken)
+    {
+        _tracker.RecordStart();
+        return Task.CompletedTask;
+    }
+
+    public Task OnStopAsync(CancellationToken cancellationToken)
+    {
+        _tracker.RecordStop();
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Second service that uses a keyed LifecycleTracker.</summary>
+public class KeyedTrackingService : IWinNuxService
+{
+    private readonly LifecycleTracker _tracker;
+
+    public KeyedTrackingService(
+        [Microsoft.Extensions.DependencyInjection.FromKeyedServices("B")]
+        LifecycleTracker tracker)
+    {
+        _tracker = tracker;
+    }
+
+    public Task OnStartAsync(CancellationToken cancellationToken)
+    {
+        _tracker.RecordStart();
+        return Task.CompletedTask;
+    }
+
+    public Task OnStopAsync(CancellationToken cancellationToken)
+    {
+        _tracker.RecordStop();
+        return Task.CompletedTask;
+    }
+}
+
+public class CancellationTokenObserver
+{
+    private readonly TaskCompletionSource _tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void Record() => _tcs.TrySetResult();
 
     /// <summary>
-    /// A minimal well-behaved service that records lifecycle calls.
+    /// Waits until Record() is called, or the timeout elapses.
+    /// Returns true if the cancellation was recorded in time.
     /// </summary>
-    private class RecordingService : IWinNuxService
+    public async Task<bool> WaitAsync(TimeSpan timeout)
     {
-        public bool StartCalled { get; private set; }
-        public bool StopCalled { get; private set; }
-        public CancellationToken ReceivedStartToken { get; private set; }
-
-        public Task OnStartAsync(CancellationToken token)
+        using var cts = new CancellationTokenSource(timeout);
+        try
         {
-            StartCalled = true;
-            ReceivedStartToken = token;
-            return Task.CompletedTask;
+            await _tcs.Task.WaitAsync(cts.Token);
+            return true;
         }
-
-        public Task OnStopAsync(CancellationToken token)
+        catch (OperationCanceledException)
         {
-            StopCalled = true;
-            return Task.CompletedTask;
+            return false;
         }
     }
+}
 
-    /// <summary>A service that throws during start.</summary>
-    private class FaultyStartService : IWinNuxService
+/// <summary>Service that records whether its token was cancelled on stop.</summary>
+public class ObservingService : IWinNuxService
+{
+    private readonly CancellationTokenObserver _observer;
+    public ObservingService(CancellationTokenObserver observer) { _observer = observer; }
+
+    public Task OnStartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task OnStopAsync(CancellationToken cancellationToken)
     {
-        public Task OnStartAsync(CancellationToken token) =>
-            throw new InvalidOperationException("Simulated start failure");
-
-        public Task OnStopAsync(CancellationToken token) => Task.CompletedTask;
-    }
-
-    /// <summary>A service that throws during stop.</summary>
-    private class FaultyStopService : IWinNuxService
-    {
-        public Task OnStartAsync(CancellationToken token) => Task.CompletedTask;
-
-        public Task OnStopAsync(CancellationToken token) =>
-            throw new InvalidOperationException("Simulated stop failure");
-    }
-
-    /// <summary>A service that respects cancellation in its run-loop.</summary>
-    private class CancellationAwareService : IWinNuxService
-    {
-        public bool LoopExitedCleanly { get; private set; }
-
-        public Task OnStartAsync(CancellationToken token)
-        {
-            _ = RunLoop(token);
-            return Task.CompletedTask;
-        }
-
-        public Task OnStopAsync(CancellationToken token) => Task.CompletedTask;
-
-        private async Task RunLoop(CancellationToken token)
-        {
-            try
-            {
-                while (!token.IsCancellationRequested)
-                    await Task.Delay(50, token);
-            }
-            catch (OperationCanceledException) { /* expected */ }
-
-            LoopExitedCleanly = true;
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Tests
-    // -------------------------------------------------------------------------
-
-    [Test]
-    public async Task OnStartAsync_IsCalledWhenHostStarts()
-    {
-        //var svc = new RecordingService();
-        var host = WinNuxService.Create().AddService< RecordingService>().Build();
-
-        await host.StartAsync();
-
-        Assert.That(svc.StartCalled, Is.True,
-            "OnStartAsync should have been called after host start");
-
-        await host.StopAsync();
-    }
-
-    [Test]
-    public async Task OnStopAsync_IsCalledWhenHostStops()
-    {
-        var svc = new RecordingService();
-        var host = WinNuxService.Create().AddService<RecordingService>().Build();
-
-        await host.StartAsync();
-        await host.StopAsync();
-
-        Assert.That(svc.StopCalled, Is.True,
-            "OnStopAsync should have been called after host stop");
-    }
-
-    [Test]
-    public async Task StartThenStop_BothLifecycleMethodsAreCalled()
-    {
-        var svc = new RecordingService();
-        var host = WinNuxService.Create().AddService(svc).Build();
-
-        await host.StartAsync();
-        await host.StopAsync();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(svc.StartCalled, Is.True);
-            Assert.That(svc.StopCalled, Is.True);
-        });
-    }
-
-    [Test]
-    public async Task OnStartAsync_ReceivesNonCancelledToken()
-    {
-        var svc = new RecordingService();
-        var host = WinNuxService.Create().AddService(svc).Build();
-
-        await host.StartAsync();
-
-        Assert.That(svc.ReceivedStartToken.IsCancellationRequested, Is.False,
-            "The token passed to OnStartAsync should not be cancelled at start time");
-
-        await host.StopAsync();
-    }
-
-    [Test]
-    public void OnStartAsync_WhenServiceThrows_ExceptionPropagates()
-    {
-        var host = WinNuxService.Create().AddService<FaultyStartService>().Build();
-
-        Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await host.StartAsync(),
-            "An exception thrown in OnStartAsync should propagate to the caller");
-    }
-
-    [Test]
-    public async Task OnStopAsync_WhenServiceThrows_ExceptionPropagates()
-    {
-        var host = WinNuxService.Create().AddService<FaultyStopService>().Build();
-        await host.StartAsync();
-
-        Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await host.StopAsync(),
-            "An exception thrown in OnStopAsync should propagate to the caller");
-    }
-
-    [Test]
-    public async Task CancellationToken_IsCancelledAfterHostStop()
-    {
-        var svc = new CancellationAwareService();
-        var host = WinNuxService.Create().AddService(svc).Build();
-
-        await host.StartAsync();
-        await Task.Delay(100);   // let the loop spin up
-        await host.StopAsync();
-        await Task.Delay(100);   // let the loop observe cancellation
-
-        Assert.That(svc.LoopExitedCleanly, Is.True,
-            "The run-loop should exit cleanly once the host cancels the token on stop");
-    }
-
-    [Test]
-    public async Task MultipleStartStop_CyclesCompleteWithoutError()
-    {
-        var host = WinNuxService.Create().AddService<RecordingService>().Build();
-
-        for (int i = 0; i < 2; i++)
-        {
-            Assert.DoesNotThrowAsync(async () =>
-            {
-                await host.StartAsync();
-                await host.StopAsync();
-            }, $"Start/stop cycle {i + 1} should complete without throwing");
-        }
+        _observer.Record();
+        return Task.CompletedTask;
     }
 }

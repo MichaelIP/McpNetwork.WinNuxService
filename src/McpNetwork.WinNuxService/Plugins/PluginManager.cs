@@ -2,6 +2,7 @@
 using McpNetwork.WinNuxService.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Reflection;
 
 namespace McpNetwork.WinNuxService.Plugins;
 
@@ -37,19 +38,8 @@ public class PluginManager : IPluginManager
 
         _logger?.LogInformation("Loading plugin from {Path}", fullPath);
 
-        var context = new PluginLoadContext(fullPath);
-        var assembly = context.LoadFromAssemblyPath(fullPath);
-
-        var serviceType = assembly
-            .GetTypes()
-            .FirstOrDefault(t =>
-                typeof(IWinNuxService).IsAssignableFrom(t) &&
-                !t.IsAbstract &&
-                !t.IsInterface)
-            ?? throw new InvalidOperationException(
-                $"No public non-abstract type implementing IWinNuxService found in '{fullPath}'.");
-
-        var instance = (IWinNuxService)ActivatorUtilities.CreateInstance(services, serviceType);
+        var (context, assembly, serviceType) = LoadAssembly(fullPath);
+        var instance = CreateInstance(services, serviceType);
 
         var plugin = new LoadedPlugin
         {
@@ -69,6 +59,34 @@ public class PluginManager : IPluginManager
 
         return plugin;
     }
+
+    /// <summary>
+    /// Loads the assembly from disk and resolves the IWinNuxService implementation type.
+    /// Override in tests to skip real DLL loading entirely.
+    /// </summary>
+    protected virtual (PluginLoadContext context, Assembly assembly, Type serviceType) LoadAssembly(string fullPath)
+    {
+        var context = new PluginLoadContext(fullPath);
+        var assembly = context.LoadFromAssemblyPath(fullPath);
+
+        var serviceType = assembly
+            .GetTypes()
+            .FirstOrDefault(t =>
+                typeof(IWinNuxService).IsAssignableFrom(t) &&
+                !t.IsAbstract &&
+                !t.IsInterface)
+            ?? throw new InvalidOperationException(
+                $"No public non-abstract type implementing IWinNuxService found in '{fullPath}'.");
+
+        return (context, assembly, serviceType);
+    }
+
+    /// <summary>
+    /// Factory method that creates a plugin service instance.
+    /// Override in tests to inject mocks without loading a real assembly.
+    /// </summary>
+    protected virtual IWinNuxService CreateInstance(IServiceProvider services, Type serviceType)
+        => (IWinNuxService)ActivatorUtilities.CreateInstance(services, serviceType);
 
     /// <inheritdoc />
     public async Task StartPlugin(LoadedPlugin plugin)

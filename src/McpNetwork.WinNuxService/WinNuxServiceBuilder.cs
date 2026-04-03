@@ -98,9 +98,13 @@ public class WinNuxServiceBuilder
         // Assemble the runtime info
         var info = new WinNuxServiceInfo
         {
-            ServiceName = serviceName ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "WinNuxService",
-            Environment = environment ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production",
-            Version = version ?? "0.0.0",
+            ServiceName = !string.IsNullOrEmpty(serviceName)
+                ? serviceName
+                : Assembly.GetEntryAssembly()?.GetName().Name ?? "WinNuxService",
+            Environment = !string.IsNullOrEmpty(environment)
+                ? environment
+                : System.Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production",
+            Version = !string.IsNullOrEmpty(version) ? version : "0.0.0",
             Properties = new Dictionary<string, string>(properties)
         };
 
