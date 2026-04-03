@@ -1,86 +1,168 @@
 ﻿using McpNetwork.WinNuxService.Interfaces;
+using McpNetwork.WinNuxService.Models;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace McpNetwork.WinNuxService.Plugins;
 
-public class PluginManager
+public class PluginManager : IPluginManager
 {
     private readonly List<LoadedPlugin> _plugins = [];
+    private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly ILogger<PluginManager>? _logger;
 
-    public IReadOnlyCollection<LoadedPlugin> Plugins => _plugins;
+    public PluginManager(ILogger<PluginManager>? logger = null)
+    {
+        _logger = logger;
+    }
 
+    /// <inheritdoc />
+    public IReadOnlyList<LoadedPlugin> Plugins
+    {
+        get
+        {
+            _lock.Wait();
+            try { return _plugins.ToList(); }
+            finally { _lock.Release(); }
+        }
+    }
+
+    /// <inheritdoc />
     public LoadedPlugin LoadPlugin(string path, IServiceProvider services)
     {
         var fullPath = Path.GetFullPath(path);
 
-        var context = new PluginLoadContext(fullPath);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"Plugin DLL not found: {fullPath}");
 
+        _logger?.LogInformation("Loading plugin from {Path}", fullPath);
+
+        var context = new PluginLoadContext(fullPath);
         var assembly = context.LoadFromAssemblyPath(fullPath);
 
         var serviceType = assembly
             .GetTypes()
-            .First(t => typeof(IWinNuxService).IsAssignableFrom(t));
+            .FirstOrDefault(t =>
+                typeof(IWinNuxService).IsAssignableFrom(t) &&
+                !t.IsAbstract &&
+                !t.IsInterface)
+            ?? throw new InvalidOperationException(
+                $"No public non-abstract type implementing IWinNuxService found in '{fullPath}'.");
 
         var instance = (IWinNuxService)ActivatorUtilities.CreateInstance(services, serviceType);
 
         var plugin = new LoadedPlugin
         {
             Path = fullPath,
+            Name = assembly.GetName().Name ?? Path.GetFileNameWithoutExtension(fullPath),
             Context = context,
             Assembly = assembly,
-            Instance = instance
+            Instance = instance,
+            State = PluginState.Loaded
         };
 
-        _plugins.Add(plugin);
+        _lock.Wait();
+        try { _plugins.Add(plugin); }
+        finally { _lock.Release(); }
+
+        _logger?.LogInformation("Plugin '{Name}' loaded (type: {Type})", plugin.Name, serviceType.Name);
 
         return plugin;
     }
 
-    public async Task<LoadedPlugin> ReloadPlugin(LoadedPlugin plugin, IServiceProvider services)
+    /// <inheritdoc />
+    public async Task StartPlugin(LoadedPlugin plugin)
     {
-        // Stop the running plugin tasks
-        await StopPlugin(plugin);
+        EnsureNotUnloaded(plugin);
 
-        // Clear instance reference
+        _logger?.LogInformation("Starting plugin '{Name}'", plugin.Name);
+
+        plugin.State = PluginState.Running;
+
+        await plugin.Instance!.OnStartAsync(plugin.Cancellation.Token);
+    }
+
+    /// <inheritdoc />
+    public async Task StopPlugin(LoadedPlugin plugin)
+    {
+        if (plugin.State == PluginState.Unloaded)
+            return;
+
+        _logger?.LogInformation("Stopping plugin '{Name}'", plugin.Name);
+
+        plugin.Cancellation.Cancel();
+
+        try
+        {
+            await plugin.Instance!.OnStopAsync(plugin.Cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // expected — the token was cancelled
+        }
+
+        plugin.Cancellation.Dispose();
+        plugin.Cancellation = new CancellationTokenSource();
+
+        plugin.State = PluginState.Stopped;
+
+        _logger?.LogInformation("Plugin '{Name}' stopped", plugin.Name);
+    }
+
+    /// <inheritdoc />
+    public async Task UnloadPlugin(LoadedPlugin plugin)
+    {
+        EnsureNotUnloaded(plugin);
+
+        _logger?.LogInformation("Unloading plugin '{Name}'", plugin.Name);
+
+        if (plugin.State == PluginState.Running)
+            await StopPlugin(plugin);
+
         plugin.Instance = null;
 
-        // Unload the old assembly context
         plugin.Context.Unload();
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
-        // Load new plugin
-        var newPlugin = LoadPlugin(plugin.Path, services);
+        plugin.State = PluginState.Unloaded;
 
-        // Start it immediately
+        _lock.Wait();
+        try { _plugins.Remove(plugin); }
+        finally { _lock.Release(); }
+
+        _logger?.LogInformation("Plugin '{Name}' unloaded and removed", plugin.Name);
+    }
+
+    /// <inheritdoc />
+    public async Task<LoadedPlugin> ReloadPlugin(LoadedPlugin plugin, IServiceProvider services)
+    {
+        EnsureNotUnloaded(plugin);
+
+        var path = plugin.Path;
+        var name = plugin.Name;
+
+        _logger?.LogInformation("Reloading plugin '{Name}' from {Path}", name, path);
+
+        // Stop if running, then fully unload (removes from list)
+        await UnloadPlugin(plugin);
+
+        // Load fresh from the same path (re-adds to list)
+        var newPlugin = LoadPlugin(path, services);
+
+        // Start the new instance immediately
         await StartPlugin(newPlugin);
+
+        _logger?.LogInformation("Plugin '{Name}' reloaded successfully", name);
 
         return newPlugin;
     }
 
-    public Task StartPlugin(LoadedPlugin plugin)
+    private static void EnsureNotUnloaded(LoadedPlugin plugin)
     {
-        return plugin.Instance.OnStartAsync(plugin.Cancellation.Token);
+        if (plugin.State == PluginState.Unloaded)
+            throw new InvalidOperationException(
+                $"Plugin '{plugin.Name}' has already been unloaded and cannot be used.");
     }
-
-    public async Task StopPlugin(LoadedPlugin plugin)
-    {
-        // Cancel the repeating loop
-        plugin.Cancellation.Cancel();
-
-        try
-        {
-            await plugin.Instance.OnStopAsync(plugin.Cancellation.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // expected
-        }
-
-        // Dispose CTS and prepare for next run
-        plugin.Cancellation.Dispose();
-        plugin.Cancellation = new CancellationTokenSource();
-    }
-
 }

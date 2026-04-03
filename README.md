@@ -7,7 +7,7 @@
 * Console applications (for debugging)
 * macOS background processes (via launchd)
 
-Built on top of the **.NET Generic Host**, it provides a clean abstraction to build modular services and **plugin-based architectures**.
+Built on top of the **.NET Generic Host**, it provides a clean abstraction to build modular services and **plugin-based architectures** with full runtime plugin management.
 
 Compatible with **.NET 10+**.
 
@@ -20,9 +20,10 @@ Compatible with **.NET 10+**.
 * Full Dependency Injection
 * Built-in Logging integration
 * Multiple services in one host
-* Plugin architecture
-* Dynamic plugin loading
-* Optional plugin hot-reload
+* Plugin architecture with startup and runtime loading
+* Dynamic plugin loading at runtime (load, start, stop, reload, unload)
+* Dependency-isolated plugins via `AssemblyLoadContext`
+* Optional plugin hot-reload without restarting the host
 * Define and access service metadata at startup (`ServiceName`, `Environment`, `Version`, custom properties)
 
 ---
@@ -67,9 +68,9 @@ WinNuxService allows you to define **service metadata** at startup. This informa
 ```csharp
 var host = WinNuxService
     .Create()
-    .WithName("MyService")                    // Sets the service name
-    .WithEnvironment("Staging")               // Sets the environment
-    .WithVersion("1.2.3")                     // Sets the version
+    .WithName("MyService")                  // Sets the service name
+    .WithEnvironment("Staging")             // Sets the environment
+    .WithVersion("1.2.3")                   // Sets the version
     .AddProperty("GitCommit", "abc123def")  // Add custom key/value
     .AddService<TestService>()
     .Build();
@@ -123,6 +124,23 @@ await host.StopAsync();
 
 * `RunAsync()` – runs the service host (blocking)
 * `StartAsync()` / `StopAsync()` – for finer control
+* `ConfigureServices(Action<IServiceProvider>)` – post-build configuration, for setup that requires the fully constructed service provider
+
+```csharp
+var host = WinNuxService
+    .Create()
+    .AddService<MyService>()
+    .Build();
+
+host.ConfigureServices(services =>
+{
+    // Resolve and configure something after the container is built
+    var config = services.GetRequiredService<IMyConfig>();
+    config.Initialize();
+});
+
+await host.RunAsync();
+```
 
 ---
 
@@ -203,6 +221,179 @@ Compatible with:
 * NLog
 * Application Insights
 * any `Microsoft.Extensions.Logging` provider
+
+---
+
+## Plugin Architecture
+
+Plugins extend your service at runtime without modifying or redeploying the host. Each plugin is a separate assembly that implements `IWinNuxService`, loaded in its own isolated `AssemblyLoadContext`.
+
+### Directory Structure
+
+```
+MyService/
+│
+├── MyService.exe
+│
+└── plugins/
+    ├── PluginA/
+    │   ├── PluginA.dll
+    │   └── (PluginA dependencies)
+    │
+    └── PluginB/
+        ├── PluginB.dll
+        └── (PluginB dependencies)
+```
+
+### Plugin Isolation
+
+Each plugin runs in its own `AssemblyLoadContext`, which means:
+
+* Full dependency isolation — plugins can use different versions of the same library
+* Safe unloading — the CLR can collect the plugin's types when unloaded
+* No version conflicts between plugins or with the host
+
+---
+
+## Loading Plugins at Startup
+
+To load plugins from external assemblies before the host starts, use `LoadExternalPlugin` on the builder:
+
+```csharp
+var host = WinNuxService
+    .Create()
+    .WithName("MyService")
+    .AddService<CoreService>()
+    .LoadExternalPlugin("plugins/PluginA/PluginA.dll")
+    .LoadExternalPlugin("plugins/PluginB/PluginB.dll")
+    .Build();
+
+await host.RunAsync();
+```
+
+The builder scans each assembly for types implementing `IWinNuxPlugin` and calls `ConfigureServices` on them, allowing plugins to register their own DI services before the host starts.
+
+---
+
+## Runtime Plugin Management
+
+After the host is started, you can load, start, stop, reload, and unload plugins at any time via `host.Plugins`, which exposes the `IPluginManager` interface.
+
+### IPluginManager API
+
+| Method | Description |
+|--------|-------------|
+| `Plugins` | Returns the list of currently loaded plugins |
+| `LoadPlugin(path, services)` | Loads a plugin DLL — does **not** start it |
+| `StartPlugin(plugin)` | Starts a loaded plugin |
+| `StopPlugin(plugin)` | Stops a running plugin, keeps it registered |
+| `UnloadPlugin(plugin)` | Stops, removes, and unloads a plugin entirely |
+| `ReloadPlugin(plugin, services)` | Stops, unloads, reloads, and restarts a plugin in-place |
+
+### LoadedPlugin Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | Assembly name of the plugin |
+| `Path` | `string` | Full path to the DLL on disk |
+| `State` | `PluginState` | Current state: `Loaded`, `Running`, `Stopped`, or `Unloaded` |
+
+### Loading and Starting a Plugin at Runtime
+
+```csharp
+var host = WinNuxService
+    .Create()
+    .WithName("MyService")
+    .AddService<CoreService>()
+    .Build();
+
+await host.StartAsync();
+
+// Later — load a plugin dynamically
+var plugin = host.Plugins.LoadPlugin("plugins/PluginA/PluginA.dll", host.Services);
+await host.Plugins.StartPlugin(plugin);
+
+Console.WriteLine($"Plugin '{plugin.Name}' is now {plugin.State}");
+// → Plugin 'PluginA' is now Running
+```
+
+### Stopping a Plugin
+
+Stops the plugin and cancels its work, but keeps it registered so it can be started again.
+
+```csharp
+await host.Plugins.StopPlugin(plugin);
+// plugin.State == PluginState.Stopped
+
+// Can be restarted later
+await host.Plugins.StartPlugin(plugin);
+```
+
+### Unloading a Plugin
+
+Fully removes the plugin: stops it, unloads its `AssemblyLoadContext`, and removes it from the list.
+
+```csharp
+await host.Plugins.UnloadPlugin(plugin);
+// plugin.State == PluginState.Unloaded
+// plugin is no longer in host.Plugins.Plugins
+```
+
+### Reloading a Plugin (Hot Reload)
+
+Reloads the plugin in-place from the same DLL path — useful for live updates in production.
+
+```csharp
+// Replace the DLL on disk, then:
+var newPlugin = await host.Plugins.ReloadPlugin(plugin, host.Services);
+
+// newPlugin is the fresh instance, fully started
+Console.WriteLine($"Plugin '{newPlugin.Name}' reloaded — state: {newPlugin.State}");
+// → Plugin 'PluginA' reloaded — state: Running
+```
+
+Reload sequence:
+1. Stop the running plugin (cancels its work)
+2. Unload its `AssemblyLoadContext` (releases memory and type locks)
+3. Force GC collection (ensures the old context is collected before reloading)
+4. Load the new assembly from the same path
+5. Start the new plugin instance
+
+### Listing Loaded Plugins
+
+```csharp
+foreach (var plugin in host.Plugins.Plugins)
+{
+    Console.WriteLine($"{plugin.Name} — {plugin.State} — {plugin.Path}");
+}
+```
+
+### Injecting IPluginManager into Your Services
+
+`IPluginManager` is registered in the DI container, so your own services can receive it through constructor injection:
+
+```csharp
+public class ManagementService : IWinNuxService
+{
+    private readonly IPluginManager _pluginManager;
+    private readonly IServiceProvider _services;
+
+    public ManagementService(IPluginManager pluginManager, IServiceProvider services)
+    {
+        _pluginManager = pluginManager;
+        _services = services;
+    }
+
+    public async Task OnStartAsync(CancellationToken token)
+    {
+        // Load a plugin from within a service
+        var plugin = _pluginManager.LoadPlugin("plugins/MyPlugin.dll", _services);
+        await _pluginManager.StartPlugin(plugin);
+    }
+
+    public Task OnStopAsync(CancellationToken token) => Task.CompletedTask;
+}
+```
 
 ---
 
@@ -302,52 +493,6 @@ public class TimeService : IWinNuxService
 
 ---
 
-## Plugin Architecture
-
-Plugins can be loaded dynamically from **external assemblies**.
-
-Example directory structure:
-
-```
-MyService/
-│
-├── MyService.exe
-│
-└── plugins/
-    ├── PluginA/
-    │   ├── PluginA.dll
-    │   └── dependencies
-    │
-    └── PluginB/
-        ├── PluginB.dll
-        └── dependencies
-```
-
-Each plugin is loaded using its own **AssemblyLoadContext**, allowing:
-
-* dependency isolation
-* different dependency versions
-* safe unloading
-* runtime reloading
-
----
-
-## Plugin Reloading
-
-Plugins can be reloaded **without restarting the main host**.
-
-Reload sequence:
-
-1. Stop plugin
-2. Cancel running tasks
-3. Unload AssemblyLoadContext
-4. Load new assembly
-5. Restart plugin
-
-This enables **live updates in production environments**.
-
----
-
 ## Platform Support
 
 | Platform | Support           |
@@ -374,15 +519,15 @@ Examples:
 
 * device communication
 * telemetry processing
-* protocol plugins
+* protocol plugins loaded and swapped at runtime
 
 **Plugin-Based Enterprise Services**
 
 Examples:
 
-* dynamically extend server capabilities
-* load new modules without redeploying
-* isolate external dependencies
+* dynamically extend server capabilities without redeploying
+* hot-reload plugins after updating their DLL on disk
+* isolate external dependencies per plugin
 
 ---
 

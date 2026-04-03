@@ -7,7 +7,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Reflection;
-using System.Runtime.InteropServices.JavaScript;
 
 namespace McpNetwork.WinNuxService;
 
@@ -116,6 +115,7 @@ public class WinNuxServiceBuilder
         builder.ConfigureServices((ctx, services) =>
         {
             services.AddSingleton<PluginManager>();
+            services.AddSingleton<IPluginManager>(sp => sp.GetRequiredService<PluginManager>());
             services.AddSingleton(info);
 
             // Register workers

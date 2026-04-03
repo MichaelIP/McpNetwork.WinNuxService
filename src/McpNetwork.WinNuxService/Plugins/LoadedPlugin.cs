@@ -1,16 +1,28 @@
 ﻿using McpNetwork.WinNuxService.Interfaces;
+using McpNetwork.WinNuxService.Models;
 using System.Reflection;
-using System.Threading;
 
 namespace McpNetwork.WinNuxService.Plugins;
 
 public class LoadedPlugin
 {
-    public string Path { get; init; }
+    /// <summary>
+    /// Full path to the plugin DLL on disk.
+    /// </summary>
+    public string Path { get; init; } = string.Empty;
 
-    internal PluginLoadContext Context { get; init; }
+    /// <summary>
+    /// Friendly name derived from the assembly name.
+    /// </summary>
+    public string Name { get; internal set; } = string.Empty;
 
-    internal Assembly Assembly { get; init; }
-    internal IWinNuxService Instance { get; set; }
+    /// <summary>
+    /// Current lifecycle state of the plugin.
+    /// </summary>
+    public PluginState State { get; internal set; } = PluginState.Loaded;
+
+    internal PluginLoadContext Context { get; init; } = null!;
+    internal Assembly Assembly { get; init; } = null!;
+    internal IWinNuxService? Instance { get; set; }
     internal CancellationTokenSource Cancellation { get; set; } = new();
 }
