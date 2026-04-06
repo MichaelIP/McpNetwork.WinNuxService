@@ -7,7 +7,7 @@ on:
 
 jobs:
   publish:
-    uses: MichaelIP/.github-workflows/.github/workflows/nuget-publish.yml@main
+    uses: MichaelIP/github-workflows/.github/workflows/nuget-publish.yml@main
     with:
       project-path: ./src/McpNetwork.WinNuxService/McpNetwork.WinNuxService.csproj
     secrets:
