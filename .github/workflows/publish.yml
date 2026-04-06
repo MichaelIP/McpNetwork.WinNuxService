@@ -1,0 +1,14 @@
+name: Publish to NuGet
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    uses: YOUR_ORG/github-workflows/.github/workflows/nuget-publish.yml@main
+    with:
+      project-path: ./src/McpNetwork.WinNuxService/McpNetwork.WinNuxService.csproj
+    secrets:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
