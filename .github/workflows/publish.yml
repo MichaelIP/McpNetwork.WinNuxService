@@ -10,6 +10,5 @@ jobs:
     uses: MichaelIP/github-workflows/.github/workflows/nuget-publish.yml@main
     with:
       project-path: ./src/McpNetwork.WinNuxService/McpNetwork.WinNuxService.csproj
-      version: "1.0.0"        # ← you update this manually when bumping major/minor/patch
     secrets:
       NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
