@@ -14,8 +14,4 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Command="REM if not exist &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)&quot; mkdir &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)&quot;&#xD;&#xA;REM copy /Y &quot;$(TargetDir)*.dll&quot; &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)&quot;&#xD;&#xA;REM del &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)\McpNetwork.WinNuxService.dll&quot;&#xD;&#xA;REM dir &quot;$(TargetDir)*.dll&quot;&#xD;&#xA;REM echo  &quot;$(ProjectDir)..\Sample.Host\$(OutDir)\plugins\$(ProjectName)&quot;" />
-  </Target>
-
 </Project>
