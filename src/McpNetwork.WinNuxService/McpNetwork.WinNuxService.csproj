@@ -27,6 +27,7 @@
 	</PropertyGroup>
 
 	<PropertyGroup>
+		<IsPackable>true</IsPackable>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<Version>11.2.1</Version>
 		<PackageProjectUrl>https://github.com/MichaelIP/McpNetwork.WinNuxService</PackageProjectUrl>
