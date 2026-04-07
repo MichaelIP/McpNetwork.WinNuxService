@@ -1,5 +1,5 @@
 ﻿using McpNetwork.SystemMetrics;
-using McpNetwork.WinNuxService.Interfaces;
+using McpNetwork.WinNuxService;
 using McpNetwork.WinNuxService.Models;
 using Microsoft.Extensions.Logging;
 using System.Text;
@@ -14,33 +14,19 @@ namespace Sample.Host.Services;
 ///     It demonstrates how a service can run in the background and perform tasks independently of the main application flow. 
 ///     The service will continue to log metrics until it receives a stop signal, at which point it will attempt to shut down gracefully by awaiting the completion of its background task.
 /// </remarks>  
-public class WorkerService : IWinNuxService
+public class WorkerService : WinNuxServiceBase
 {
-    private Task? loop;
+    //private Task? loop;
     private readonly WinNuxServiceInfo info;
-    private readonly ILogger<HeartbeatService> logger;
+    private readonly ILogger<WorkerService> logger;
 
-    public WorkerService(WinNuxServiceInfo serviceInfo, ILogger<HeartbeatService> logger)
+    public WorkerService(WinNuxServiceInfo serviceInfo, ILogger<WorkerService> logger)
     {
         this.logger = logger;
         info = serviceInfo;
     }
 
-    public Task OnStartAsync(CancellationToken cancellationToken)
-    {
-        logger.LogInformation(">>>>>> WorkerService started");
-        loop = RunLoop(cancellationToken);
-        return Task.CompletedTask;
-    }
-
-    public async Task OnStopAsync(CancellationToken cancellationToken)
-    {
-        logger.LogInformation(">>>>>> WorkerService stopping");
-        if (loop != null)
-            await loop;
-    }
-
-    private async Task RunLoop(CancellationToken token)
+    protected override async Task ExecuteAsync(CancellationToken token)
     {
 
         try

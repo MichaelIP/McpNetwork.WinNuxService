@@ -1,5 +1,4 @@
 ﻿using McpNetwork.WinNuxService.Interfaces;
-using Microsoft.Extensions.Hosting;
 
 namespace McpNetwork.WinNuxService.Adapters;
 
@@ -43,10 +42,16 @@ public class ServiceAdapter<TService> : BackgroundService
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        // 1. Signal ExecuteAsync to exit
         _internalCts.Cancel();
 
-        await _service.OnStopAsync(cancellationToken);
-
+        // 2. Wait for ExecuteAsync to fully complete — BEFORE stopping the service
         await base.StopAsync(cancellationToken);
+
+        // 3. Stop the service with a fresh, uncancelled token — immune to the host deadline
+        await _service.OnStopAsync(CancellationToken.None);
+
+        // 4. Cleanup
+        _internalCts.Dispose();
     }
 }

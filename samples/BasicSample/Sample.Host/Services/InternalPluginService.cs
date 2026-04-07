@@ -1,16 +1,12 @@
-﻿using McpNetwork.WinNuxService.Interfaces;
+﻿using McpNetwork.WinNuxService;
 using Microsoft.Extensions.Logging;
 using Sample.Host.Interfaces;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace Sample.Host.Services
 {
-    internal class InternalPluginService : IWinNuxService
+    internal class InternalPluginService : WinNuxServiceBase
     {
 
-        private Task? loop;
         private readonly IDependency dependency;
         private readonly ILogger<InternalPluginService> logger;
 
@@ -20,23 +16,8 @@ namespace Sample.Host.Services
             this.dependency = dependency;
         }
 
-        public Task OnStartAsync(CancellationToken cancellationToken)
+        protected async override Task ExecuteAsync(CancellationToken token)
         {
-            logger.LogInformation("InternalPluginService started");
-            loop = RunLoop(cancellationToken);
-            return Task.CompletedTask;
-        }
-
-        public async Task OnStopAsync(CancellationToken cancellationToken)
-        {
-            logger.LogInformation("InternalPluginService stopping");
-            if (loop != null)
-                await loop;
-        }
-
-        private async Task RunLoop(CancellationToken token)
-        {
-
             try
             {
                 while (!token.IsCancellationRequested)

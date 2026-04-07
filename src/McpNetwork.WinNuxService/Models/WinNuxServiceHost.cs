@@ -1,5 +1,4 @@
 ﻿using McpNetwork.WinNuxService.Interfaces;
-using Microsoft.Extensions.Hosting;
 
 namespace McpNetwork.WinNuxService.Models;
 

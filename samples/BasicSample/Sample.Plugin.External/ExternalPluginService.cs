@@ -1,5 +1,5 @@
 ﻿using McpNetwork.SystemMetrics;
-using McpNetwork.WinNuxService.Interfaces;
+using McpNetwork.WinNuxService;
 using McpNetwork.WinNuxService.Models;
 using Microsoft.Extensions.Logging;
 using System.Text;
@@ -15,10 +15,9 @@ namespace Sample.Plugin.External;
 ///     System metrics are gathered using the McpNetwork.SystemMetrics library version 5.0.1 whereas the main application uses version 7.0.0 of this Nuget package. 
 ///     This demonstrates that the plugin can use a different version of a library than the host application without conflicts, thanks to the isolation provided by the plugin load context.
 /// </remarks>
-public class ExternalPluginService : IWinNuxService
+public class ExternalPluginService : WinNuxServiceBase
 {
 
-    private Task? loop;
     private readonly WinNuxServiceInfo info;
     private readonly Guid _guid = Guid.NewGuid();
     private readonly ILogger<ExternalPluginService> logger;
@@ -37,40 +36,14 @@ public class ExternalPluginService : IWinNuxService
         this.logger = logger;
     }
 
-    /// <summary>
-    ///     Starts the service by launching a background task that runs the RunLoop method. 
-    ///     The cancellation token is passed to allow for graceful shutdown when requested.
-    /// </summary>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    public Task OnStartAsync(CancellationToken cancellationToken)
-    {
-        logger.LogInformation($"ExternalPluginService started [{_guid}]");
-        loop = RunLoop(cancellationToken);
-        return Task.CompletedTask;
-
-    }
-
-    /// <summary>
-    ///     Stops the service by signaling cancellation to the background task and awaiting its completion.
-    /// </summary>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    public async Task OnStopAsync(CancellationToken cancellationToken)
-    {
-        logger.LogInformation($"ExternalPluginService stopping  [{_guid}]");
-        if (loop != null)
-            await loop;
-    }
 
     /// <summary>
     ///     Loops until cancellation is requested, logging system metrics every 2 seconds.
     /// </summary>
     /// <param name="token"></param>
     /// <returns></returns>
-    private async Task RunLoop(CancellationToken token)
+    override protected async Task ExecuteAsync(CancellationToken token)
     {
-
         try
         {
             while (!token.IsCancellationRequested)

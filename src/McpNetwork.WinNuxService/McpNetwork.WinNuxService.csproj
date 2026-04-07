@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
@@ -28,8 +28,9 @@
 
 	<PropertyGroup>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-		<Version>11.2.0</Version>
+		<Version>11.2.1</Version>
 		<PackageProjectUrl>https://github.com/MichaelIP/McpNetwork.WinNuxService</PackageProjectUrl>
+		<OutputType>Library</OutputType>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -44,8 +45,6 @@
 
 
 	<ItemGroup>
-		<PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
-		<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5" />
 		<PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.5" />
 		<PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.5" />
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />

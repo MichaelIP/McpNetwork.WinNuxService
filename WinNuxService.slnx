@@ -3,6 +3,7 @@
   <Folder Name="/samples/BasicSample/">
     <Project Path="samples/BasicSample/Sample.Host/Sample.Host.csproj" />
     <Project Path="samples/BasicSample/Sample.Plugin.External/Sample.Plugin.External.csproj" />
+    <Project Path="samples/BasicSample/Sample.WebHost/Sample.WebHost.csproj" Id="a08f030b-f030-4bb8-b4b0-c56183ad9f73" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />

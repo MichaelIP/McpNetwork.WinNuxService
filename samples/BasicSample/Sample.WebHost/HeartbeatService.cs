@@ -2,7 +2,7 @@
 using McpNetwork.WinNuxService.Models;
 using Microsoft.Extensions.Logging;
 
-namespace Sample.Host.Services;
+namespace Sample.WebHost;
 
 public class HeartbeatService : WinNuxServiceBase
 {

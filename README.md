@@ -7,7 +7,7 @@
 * Console applications (for debugging)
 * macOS background processes (via launchd)
 
-Built on top of the **.NET Generic Host**, it provides a clean abstraction to build modular services and **plugin-based architectures** with full runtime plugin management.
+Built on top of the **.NET Generic Host**, it provides a clean abstraction to build modular services and **plugin-based architectures**.
 
 Compatible with **.NET 10+**.
 
@@ -25,6 +25,7 @@ Compatible with **.NET 10+**.
 * Dependency-isolated plugins via `AssemblyLoadContext`
 * Optional plugin hot-reload without restarting the host
 * Define and access service metadata at startup (`ServiceName`, `Environment`, `Version`, custom properties)
+* **Embedded HTTP server and SignalR support via `WithWebHost()`**
 
 ---
 
@@ -68,10 +69,10 @@ WinNuxService allows you to define **service metadata** at startup. This informa
 ```csharp
 var host = WinNuxService
     .Create()
-    .WithName("MyService")                  // Sets the service name
-    .WithEnvironment("Staging")             // Sets the environment
-    .WithVersion("1.2.3")                   // Sets the version
-    .AddProperty("GitCommit", "abc123def")  // Add custom key/value
+    .WithName("MyService")                   // Sets the service name
+    .WithEnvironment("Staging")              // Sets the environment
+    .WithVersion("1.2.3")                    // Sets the version
+    .AddProperty("GitCommit", "abc123def")   // Add custom key/value
     .AddService<TestService>()
     .Build();
 ```
@@ -84,7 +85,7 @@ var host = WinNuxService
 ### Accessing Metadata in Services
 
 ```csharp
-public class TestService : IWinNuxService
+public class TestService : WinNuxServiceBase
 {
     private readonly WinNuxServiceInfo _info;
 
@@ -93,21 +94,13 @@ public class TestService : IWinNuxService
         _info = info;
     }
 
-    public Task OnStartAsync(CancellationToken token)
+    protected override async Task ExecuteAsync(CancellationToken token)
     {
-        Console.WriteLine($"Starting {_info.ServiceName} ({_info.Environment}) version {_info.Version}");
+        Console.WriteLine($"Starting {_info.ServiceName} ({_info.Environment}) v{_info.Version}");
         foreach (var prop in _info.Properties)
-        {
-            Console.WriteLine($"Property: {prop.Key} = {prop.Value}");
-        }
+            Console.WriteLine($"  {prop.Key} = {prop.Value}");
 
-        return Task.CompletedTask;
-    }
-
-    public Task OnStopAsync(CancellationToken token)
-    {
-        Console.WriteLine($"Stopping {_info.ServiceName}");
-        return Task.CompletedTask;
+        await Task.Delay(Timeout.Infinite, token);
     }
 }
 ```
@@ -127,64 +120,133 @@ await host.StopAsync();
 * `StopAsync()` – stops the host, calling `OnStopAsync` on all services
 * `ConfigureServices(Action<IServiceProvider>)` – post-build configuration, for setup that requires the fully constructed service provider
 
-```csharp
-var host = WinNuxService
-    .Create()
-    .AddService<MyService>()
-    .Build();
-
-host.ConfigureServices(services =>
-{
-    // Resolve and configure something after the container is built
-    var config = services.GetRequiredService<IMyConfig>();
-    config.Initialize();
-});
-
-await host.RunAsync();
-```
-
 ---
 
-## Creating a Service Module
+## Creating a Service
 
-Service modules implement `IWinNuxService`, which has two methods with distinct responsibilities:
+### Recommended: inherit `WinNuxServiceBase`
 
-| Method | Token meaning | Purpose |
-|--------|--------------|---------|
-| `OnStartAsync(token)` | Abort startup | Called once at startup — complete quickly and return. Use it to initialise state and launch background work. |
-| `OnStopAsync(token)` | Abort shutdown | Called once when the host is stopping. Cancel background work and release resources. |
-
-> **Important:** the token passed to `OnStartAsync` is a *startup-abort* token — it signals that startup is taking too long, not that the service is stopping. Do **not** use it to drive a long-running loop. Use a `CancellationTokenSource` that you cancel in `OnStopAsync` instead.
+`WinNuxServiceBase` is the recommended way to implement a service. It handles all cancellation
+boilerplate for you — including safe shutdown regardless of host type (plain, web, Windows Service,
+systemd). You only need to implement `ExecuteAsync`.
 
 ```csharp
-public class TestService : IWinNuxService
+public class HeartbeatService : WinNuxServiceBase
 {
-    private readonly CancellationTokenSource _cts = new();
+    private readonly ILogger<HeartbeatService> _logger;
 
-    public Task OnStartAsync(CancellationToken token)
+    public HeartbeatService(ILogger<HeartbeatService> logger)
     {
-        // Launch background work — do NOT pass token here
-        _ = RunLoop(_cts.Token);
-        return Task.CompletedTask;
+        _logger = logger;
     }
 
-    public async Task OnStopAsync(CancellationToken token)
-    {
-        // Signal the background loop to stop
-        await _cts.CancelAsync();
-        Console.WriteLine("Service stopping");
-    }
-
-    private async Task RunLoop(CancellationToken token)
+    protected override async Task ExecuteAsync(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
-            Console.WriteLine("Service running");
-            await Task.Delay(5000, token);
+            _logger.LogInformation("Heartbeat at {Time}", DateTime.Now);
+            await Task.Delay(TimeSpan.FromSeconds(5), token);
         }
     }
 }
 ```
+
+There is no need to manage `CancellationTokenSource`, `try/catch` for `OperationCanceledException`,
+or override `OnStartAsync` / `OnStopAsync`. The base class takes care of all of it.
+
+Unexpected exceptions thrown from `ExecuteAsync` are surfaced via the `OnUnhandledException` hook,
+which rethrows by default. Override it to log and swallow instead:
+
+```csharp
+protected override void OnUnhandledException(Exception ex)
+{
+    _logger.LogCritical(ex, "Unhandled error in {Service}", GetType().Name);
+    // swallow — host keeps running
+}
+```
+
+### Advanced: override `OnStartAsync` / `OnStopAsync`
+
+Two cases legitimately require overriding the lifecycle methods.
+
+**Case 1 — You need to acquire or release external resources (connections, file handles, etc.):**
+
+```csharp
+public class DatabasePollerService : WinNuxServiceBase
+{
+    private SqlConnection? _connection;
+
+    public override async Task OnStartAsync(CancellationToken cancellationToken)
+    {
+        _connection = new SqlConnection("...");
+        await _connection.OpenAsync(cancellationToken);
+        await base.OnStartAsync(cancellationToken); // always call base
+    }
+
+    public override async Task OnStopAsync(CancellationToken cancellationToken)
+    {
+        await base.OnStopAsync(cancellationToken);  // always call base first
+        await _connection!.DisposeAsync();
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            // poll database...
+            await Task.Delay(TimeSpan.FromSeconds(10), token);
+        }
+    }
+}
+```
+
+> **Important:** always call `base.OnStartAsync()` and `base.OnStopAsync()`. Omitting either will
+> break the internal cancellation lifecycle.
+
+**Case 2 — You need custom exception handling per service:**
+
+```csharp
+public class ResilientService : WinNuxServiceBase
+{
+    private readonly ILogger<ResilientService> _logger;
+
+    public ResilientService(ILogger<ResilientService> logger) => _logger = logger;
+
+    protected override void OnUnhandledException(Exception ex)
+    {
+        _logger.LogCritical(ex, "ResilientService crashed — host stays alive");
+        // swallow intentionally
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken token) { ... }
+}
+```
+
+### Low-level: implement `IWinNuxService` directly
+
+For maximum control, you can implement the interface directly. This is rarely needed.
+
+```csharp
+public class TestService : IWinNuxService
+{
+    public Task OnStartAsync(CancellationToken token)
+    {
+        // start your work here
+        return Task.CompletedTask;
+    }
+
+    public Task OnStopAsync(CancellationToken token)
+    {
+        // stop your work here
+        return Task.CompletedTask;
+    }
+}
+```
+
+> **Warning:** when implementing `IWinNuxService` directly, you are responsible for safe
+> cancellation. The token passed to `OnStartAsync` is controlled by the host and its lifecycle
+> varies depending on the host type (plain vs web). Use a linked
+> `CancellationTokenSource` owned by your service to avoid shutdown hangs.
 
 ---
 
@@ -236,174 +298,126 @@ Compatible with:
 
 ---
 
-## Plugin Architecture
+## Embedded HTTP Server and SignalR
 
-Plugins extend your service at runtime without modifying or redeploying the host. Each plugin is a separate assembly that implements `IWinNuxService`, loaded in its own isolated `AssemblyLoadContext`.
+WinNuxService supports embedding an **ASP.NET Core HTTP server** and/or a **SignalR hub** directly
+inside the host process — alongside your background services — via the `WithWebHost()` method.
 
-### Directory Structure
+This is useful for exposing health endpoints, REST APIs, or real-time communication without running
+a separate web process.
 
-```
-MyService/
-│
-├── MyService.exe
-│
-└── plugins/
-    ├── PluginA/
-    │   ├── PluginA.dll
-    │   └── (PluginA dependencies)
-    │
-    └── PluginB/
-        ├── PluginB.dll
-        └── (PluginB dependencies)
-```
+### How it works
 
-### Plugin Isolation
+`WithWebHost()` accepts two optional delegates:
 
-Each plugin runs in its own `AssemblyLoadContext`, which means:
+* `configureBuilder` — runs during the **builder phase**: register ASP.NET Core services such as
+  `AddSignalR()`, `AddControllers()`, etc.
+* `configureApp` — runs during the **app phase**: map routes, hubs, and middleware with `MapGet()`,
+  `MapHub()`, etc.
 
-* Full dependency isolation — plugins can use different versions of the same library
-* Safe unloading — the CLR can collect the plugin's types when unloaded
-* No version conflicts between plugins or with the host
+Your background services registered with `AddService<T>()` continue to run alongside the HTTP layer
+in the same process. All existing features — DI, logging, metadata, plugins — work unchanged.
 
----
-
-## Loading Plugins at Startup
-
-To load plugins from external assemblies before the host starts, use `LoadExternalPlugin` on the builder:
+### Health and info endpoints
 
 ```csharp
-var host = WinNuxService
+await WinNuxService
     .Create()
-    .WithName("MyService")
-    .AddService<CoreService>()
-    .LoadExternalPlugin("plugins/PluginA/PluginA.dll")
-    .LoadExternalPlugin("plugins/PluginB/PluginB.dll")
-    .Build();
-
-await host.RunAsync();
+    .WithName("MyApiService")
+    .WithVersion("2.0.0")
+    .WithWebHost(
+        configureApp: app =>
+        {
+            app.MapGet("/health", () => Results.Ok(new { status = "alive" }));
+            app.MapGet("/info", (WinNuxServiceInfo info) => Results.Ok(info));
+        }
+    )
+    .AddService<HeartbeatService>()
+    .RunAsync();
 ```
 
-The builder scans each assembly for types implementing `IWinNuxPlugin` and calls `ConfigureServices` on them, allowing plugins to register their own DI services before the host starts.
-
----
-
-## Runtime Plugin Management
-
-After the host is started, you can load, start, stop, reload, and unload plugins at any time via `host.Plugins`, which exposes the `IPluginManager` interface.
-
-### IPluginManager API
-
-| Method | Description |
-|--------|-------------|
-| `Plugins` | Returns the list of currently loaded plugins |
-| `LoadPlugin(path, services)` | Loads a plugin DLL — does **not** start it |
-| `StartPlugin(plugin)` | Starts a loaded plugin |
-| `StopPlugin(plugin)` | Stops a running plugin, keeps it registered |
-| `UnloadPlugin(plugin)` | Stops, removes, and unloads a plugin entirely |
-| `ReloadPlugin(plugin, services)` | Stops, unloads, reloads, and restarts a plugin in-place |
-
-### LoadedPlugin Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `Name` | `string` | Assembly name of the plugin |
-| `Path` | `string` | Full path to the DLL on disk |
-| `State` | `PluginState` | Current state: `Loaded`, `Running`, `Stopped`, or `Unloaded` |
-
-### Loading and Starting a Plugin at Runtime
+### With SignalR
 
 ```csharp
-var host = WinNuxService
+await WinNuxService
     .Create()
-    .WithName("MyService")
-    .AddService<CoreService>()
-    .Build();
-
-await host.StartAsync();
-
-// Later — load a plugin dynamically
-var plugin = host.Plugins.LoadPlugin("plugins/PluginA/PluginA.dll", host.Services);
-await host.Plugins.StartPlugin(plugin);
-
-Console.WriteLine($"Plugin '{plugin.Name}' is now {plugin.State}");
-// → Plugin 'PluginA' is now Running
+    .WithName("MyRealtimeService")
+    .WithWebHost(
+        configureBuilder: builder =>
+        {
+            builder.Services.AddSignalR();
+        },
+        configureApp: app =>
+        {
+            app.MapHub<NotificationHub>("/notifications");
+            app.MapGet("/health", () => "OK");
+        }
+    )
+    .AddService<HeartbeatService>()
+    .RunAsync();
 ```
 
-### Stopping a Plugin
-
-Stops the plugin and cancels its work, but keeps it registered so it can be started again.
+The hub itself is a standard ASP.NET Core Hub — no WinNuxService-specific code required:
 
 ```csharp
-await host.Plugins.StopPlugin(plugin);
-// plugin.State == PluginState.Stopped
-
-// Can be restarted later
-await host.Plugins.StartPlugin(plugin);
-```
-
-### Unloading a Plugin
-
-Fully removes the plugin: stops it, unloads its `AssemblyLoadContext`, and removes it from the list.
-
-```csharp
-await host.Plugins.UnloadPlugin(plugin);
-// plugin.State == PluginState.Unloaded
-// plugin is no longer in host.Plugins.Plugins
-```
-
-### Reloading a Plugin (Hot Reload)
-
-Reloads the plugin in-place from the same DLL path — useful for live updates in production.
-
-```csharp
-// Replace the DLL on disk, then:
-var newPlugin = await host.Plugins.ReloadPlugin(plugin, host.Services);
-
-// newPlugin is the fresh instance, fully started
-Console.WriteLine($"Plugin '{newPlugin.Name}' reloaded — state: {newPlugin.State}");
-// → Plugin 'PluginA' reloaded — state: Running
-```
-
-Reload sequence:
-1. Stop the running plugin (cancels its work)
-2. Unload its `AssemblyLoadContext` (releases memory and type locks)
-3. Force GC collection (ensures the old context is collected before reloading)
-4. Load the new assembly from the same path
-5. Start the new plugin instance
-
-### Listing Loaded Plugins
-
-```csharp
-foreach (var plugin in host.Plugins.Plugins)
+public class NotificationHub : Hub
 {
-    Console.WriteLine($"{plugin.Name} — {plugin.State} — {plugin.Path}");
+    public async Task SendMessage(string message) =>
+        await Clients.All.SendAsync("ReceiveMessage", message);
 }
 ```
 
-### Injecting IPluginManager into Your Services
-
-`IPluginManager` is registered in the DI container, so your own services can receive it through constructor injection:
+### Full example with SignalR and background services
 
 ```csharp
-public class ManagementService : IWinNuxService
+// Program.cs
+await WinNuxService
+    .Create()
+    .WithName("WinNuxService-WebDemo")
+    .WithEnvironment("Demo")
+    .WithVersion("1.0.0")
+    .ConfigureLogging(logging =>
+    {
+        logging.AddConsole();
+        logging.AddDebug();
+    })
+    .WithWebHost(
+        configureBuilder: builder =>
+        {
+            builder.Services.AddSignalR();
+        },
+        configureApp: app =>
+        {
+            app.MapGet("/health", () => Results.Ok(new { status = "alive" }));
+            app.MapGet("/info", (WinNuxServiceInfo info) => Results.Ok(info));
+            app.MapHub<NotificationHub>("/notifications");
+        }
+    )
+    .AddService<HeartbeatService>()
+    .RunAsync();
+```
+
+```csharp
+// HeartbeatService.cs
+public class HeartbeatService : WinNuxServiceBase
 {
-    private readonly IPluginManager _pluginManager;
-    private readonly IServiceProvider _services;
+    private readonly WinNuxServiceInfo _info;
+    private readonly ILogger<HeartbeatService> _logger;
 
-    public ManagementService(IPluginManager pluginManager, IServiceProvider services)
+    public HeartbeatService(WinNuxServiceInfo info, ILogger<HeartbeatService> logger)
     {
-        _pluginManager = pluginManager;
-        _services = services;
+        _info = info;
+        _logger = logger;
     }
 
-    public async Task OnStartAsync(CancellationToken token)
+    protected override async Task ExecuteAsync(CancellationToken token)
     {
-        // Load a plugin from within a service
-        var plugin = _pluginManager.LoadPlugin("plugins/MyPlugin.dll", _services);
-        await _pluginManager.StartPlugin(plugin);
+        while (!token.IsCancellationRequested)
+        {
+            _logger.LogInformation("Heartbeat from {Name} at {Time}", _info.ServiceName, DateTime.Now);
+            await Task.Delay(TimeSpan.FromSeconds(5), token);
+        }
     }
-
-    public Task OnStopAsync(CancellationToken token) => Task.CompletedTask;
 }
 ```
 
@@ -442,26 +456,13 @@ public class ConsoleMessenger : IMessenger
 ### HeartbeatService.cs
 
 ```csharp
-public class HeartbeatService : IWinNuxService
+public class HeartbeatService : WinNuxServiceBase
 {
     private readonly IMessenger _messenger;
-    private readonly CancellationTokenSource _cts = new();
 
     public HeartbeatService(IMessenger messenger) { _messenger = messenger; }
 
-    public Task OnStartAsync(CancellationToken token)
-    {
-        _ = RunLoop(_cts.Token);
-        return Task.CompletedTask;
-    }
-
-    public async Task OnStopAsync(CancellationToken token)
-    {
-        await _cts.CancelAsync();
-        _messenger.Send("HeartbeatService stopping");
-    }
-
-    private async Task RunLoop(CancellationToken token)
+    protected override async Task ExecuteAsync(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
@@ -475,26 +476,13 @@ public class HeartbeatService : IWinNuxService
 ### TimeService.cs
 
 ```csharp
-public class TimeService : IWinNuxService
+public class TimeService : WinNuxServiceBase
 {
     private readonly IMessenger _messenger;
-    private readonly CancellationTokenSource _cts = new();
 
     public TimeService(IMessenger messenger) { _messenger = messenger; }
 
-    public Task OnStartAsync(CancellationToken token)
-    {
-        _ = RunLoop(_cts.Token);
-        return Task.CompletedTask;
-    }
-
-    public async Task OnStopAsync(CancellationToken token)
-    {
-        await _cts.CancelAsync();
-        _messenger.Send("TimeService stopping");
-    }
-
-    private async Task RunLoop(CancellationToken token)
+    protected override async Task ExecuteAsync(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
@@ -504,6 +492,52 @@ public class TimeService : IWinNuxService
     }
 }
 ```
+
+---
+
+## Plugin Architecture
+
+Plugins can be loaded dynamically from **external assemblies**.
+
+Example directory structure:
+
+```
+MyService/
+│
+├── MyService.exe
+│
+└── plugins/
+    ├── PluginA/
+    │   ├── PluginA.dll
+    │   └── dependencies
+    │
+    └── PluginB/
+        ├── PluginB.dll
+        └── dependencies
+```
+
+Each plugin is loaded using its own **AssemblyLoadContext**, allowing:
+
+* dependency isolation
+* different dependency versions
+* safe unloading
+* runtime reloading
+
+---
+
+## Plugin Reloading
+
+Plugins can be reloaded **without restarting the main host**.
+
+Reload sequence:
+
+1. Stop plugin
+2. Cancel running tasks
+3. Unload AssemblyLoadContext
+4. Load new assembly
+5. Restart plugin
+
+This enables **live updates in production environments**.
 
 ---
 
@@ -533,15 +567,23 @@ Examples:
 
 * device communication
 * telemetry processing
-* protocol plugins loaded and swapped at runtime
+* protocol plugins
 
 **Plugin-Based Enterprise Services**
 
 Examples:
 
-* dynamically extend server capabilities without redeploying
-* hot-reload plugins after updating their DLL on disk
-* isolate external dependencies per plugin
+* dynamically extend server capabilities
+* load new modules without redeploying
+* isolate external dependencies
+
+**Hybrid Service + API**
+
+Examples:
+
+* background worker exposing a `/health` endpoint
+* real-time telemetry pushed over SignalR
+* internal REST API alongside scheduled jobs
 
 ---
 
