@@ -2,6 +2,7 @@
 using McpNetwork.WinNuxService.Interfaces;
 using McpNetwork.WinNuxService.Models;
 using McpNetwork.WinNuxService.Plugins;
+using Microsoft.AspNetCore.TestHost;
 using System.Diagnostics;
 using System.Reflection;
 
@@ -13,11 +14,13 @@ public class WinNuxServiceBuilder
     private readonly List<Type> _plugins = new();
     private readonly List<Assembly> _pluginAssemblies = new();
     private readonly List<PluginLoadContext> _pluginContexts = new();
+    private readonly List<Action<WebApplication>> _middlewares = new();
 
     private Action<ILoggingBuilder>? _configureLogging;
     private Action<HostBuilderContext, IServiceCollection>? _configureServices;
 
     private WebHostOptions? _webHostOptions;
+    private bool _useTestServer = false;
     private string version = string.Empty;
     private string serviceName = string.Empty;
     private string environment = string.Empty;
@@ -71,6 +74,12 @@ public class WinNuxServiceBuilder
         return this;
     }
 
+    public WinNuxServiceBuilder UseMiddleware<TMiddleware>() where TMiddleware : class
+    {
+        _middlewares.Add(app => app.UseMiddleware<TMiddleware>());
+        return this;
+    }
+
     public WinNuxServiceBuilder LoadPlugin<T>()
         where T : IWinNuxPlugin
     {
@@ -103,6 +112,12 @@ public class WinNuxServiceBuilder
         var assembly = loadContext.LoadFromAssemblyPath(fullPath);
         _pluginAssemblies.Add(assembly);
 
+        return this;
+    }
+
+    public WinNuxServiceBuilder WithTestServer()
+    {
+        _useTestServer = true;
         return this;
     }
 
@@ -321,18 +336,28 @@ public class WinNuxServiceBuilder
 
         builder.Host.UseWindowsService();
         builder.Host.UseSystemd();
-
+       
         // Same core services — plugins, workers, metadata
         builder.Host.ConfigureServices((ctx, services) => ConfigureCommonServices(ctx, services, info));
         builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
         builder.Host.ConfigureLogging(ConfigureCommonLogging);
+
+#if DEBUG
+        if (_useTestServer)
+            builder.WebHost.UseTestServer();  // swaps Kestrel — must happen before Build()
+#endif
 
         // ASP.NET Core specific — what BuildPlain never had
         _webHostOptions!.ConfigureBuilder?.Invoke(builder);
 
         var app = builder.Build();
 
-        _webHostOptions.ConfigureApp?.Invoke(app);
+        // Apply registered middlewares first — order matters
+        foreach (var middleware in _middlewares)
+            middleware(app);
+
+        // Then let the caller map routes and hubs
+        _webHostOptions!.ConfigureApp?.Invoke(app);
 
         return new WinNuxServiceHost(app, info);
     }

@@ -23,8 +23,7 @@ Compatible with **.NET 10+**.
 * Plugin architecture with startup and runtime loading
 * Dynamic plugin loading at runtime (load, start, stop, reload, unload)
 * Dependency-isolated plugins via `AssemblyLoadContext`
-* Optional plugin hot-reload without restarting the host
-* Define and access service metadata at startup (`ServiceName`, `Environment`, `Version`, custom properties)
+* Optional plugin hot-reload without restarting the host* Define and access service metadata at startup (`ServiceName`, `Environment`, `Version`, custom properties)
 * **Embedded HTTP server and SignalR support via `WithWebHost()`**
 
 ---
@@ -421,6 +420,98 @@ public class HeartbeatService : WinNuxServiceBase
 }
 ```
 
+### Middleware
+
+When using `WithWebHost()`, the full ASP.NET Core middleware pipeline is available. Middlewares are
+registered inside `configureApp` using the standard `UseMiddleware<T>()` or `Use()` API, and must
+be added **before** route mappings so they wrap all incoming requests.
+
+**Typed middleware** — implement a class with an `InvokeAsync` method:
+
+```csharp
+public class ApiKeyMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly string _expectedKey;
+
+    public ApiKeyMiddleware(RequestDelegate next, IConfiguration config)
+    {
+        _next = next;
+        _expectedKey = config["ApiKey"] ?? throw new InvalidOperationException("ApiKey not configured");
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        if (!context.Request.Headers.TryGetValue("X-Api-Key", out var key) || key != _expectedKey)
+        {
+            context.Response.StatusCode = 401;
+            await context.Response.WriteAsync("Unauthorized");
+            return;
+        }
+
+        await _next(context);
+    }
+}
+```
+
+Register it via `UseMiddleware<T>()` in `configureBuilder` / `configureApp`:
+
+```csharp
+.WithWebHost(
+    configureBuilder: builder =>
+    {
+        builder.Services.AddSignalR();
+    },
+    configureApp: app =>
+    {
+        // Middlewares first — they wrap everything below
+        app.UseMiddleware<ApiKeyMiddleware>();
+
+        // Then routes and hubs
+        app.MapGet("/health", () => Results.Ok(new { status = "alive" }));
+        app.MapHub<NotificationHub>("/notifications");
+    }
+)
+```
+
+**Inline middleware** — for simple, one-off cases:
+
+```csharp
+configureApp: app =>
+{
+    app.Use(async (context, next) =>
+    {
+        context.Response.Headers["X-Powered-By"] = "WinNuxService";
+        await next(context);
+    });
+
+    app.MapGet("/health", () => "OK");
+}
+```
+
+**Fluent shortcut** — `UseMiddleware<T>()` is also available directly on the builder for a cleaner
+registration style alongside `AddService<T>()`:
+
+```csharp
+await WinNuxService
+    .Create()
+    .WithName("MyApiService")
+    .UseMiddleware<RequestLoggingMiddleware>()   // registered here
+    .UseMiddleware<ApiKeyMiddleware>()            // in order
+    .WithWebHost(
+        configureApp: app =>
+        {
+            app.MapGet("/health", () => "OK");
+            app.MapHub<NotificationHub>("/notifications");
+        }
+    )
+    .AddService<HeartbeatService>()
+    .RunAsync();
+```
+
+> **Middleware order matters.** The pipeline executes top to bottom. A typical sensible order is:
+> exception handling → request logging → authentication → authorization → endpoints.
+
 ---
 
 ## Minimal Example (~60 lines)
@@ -548,6 +639,134 @@ This enables **live updates in production environments**.
 | Windows  | Windows Service   |
 | Linux    | systemd           |
 | macOS    | Console / launchd |
+
+WinNuxService detects the runtime environment automatically. The same binary runs as a console
+application when launched interactively, and as a native service when started by the OS service
+manager — no code change required.
+
+### Deploying as a Windows Service
+
+**1. Publish the application**
+
+```cmd
+dotnet publish -c Release -r win-x64 --self-contained true -o C:\Services\MyService
+```
+
+**2. Create the Windows Service**
+
+Open a command prompt as Administrator:
+
+```cmd
+sc create MyService binPath="C:\Services\MyService\MyService.exe" start=auto
+sc description MyService "My WinNuxService background service"
+```
+
+**3. Start the service**
+
+```cmd
+sc start MyService
+```
+
+**4. Manage the service**
+
+```cmd
+sc stop MyService       # graceful stop
+sc delete MyService     # uninstall
+sc query MyService      # check status
+```
+
+You can also use the **Services** panel (`services.msc`) or PowerShell:
+
+```powershell
+Start-Service MyService
+Stop-Service  MyService
+Get-Service   MyService
+```
+
+> **Logging on Windows:** when running as a Windows Service, console output is suppressed. Use
+> `AddEventLog()` to write to the Windows Event Log, or configure a file-based logger such as
+> Serilog with a rolling file sink.
+
+---
+
+### Deploying as a Linux systemd Service
+
+**1. Publish the application**
+
+```bash
+dotnet publish -c Release -r linux-x64 --self-contained true -o /opt/myservice
+chmod +x /opt/myservice/MyService
+```
+
+**2. Create the systemd unit file**
+
+Create `/etc/systemd/system/myservice.service`:
+
+```ini
+[Unit]
+Description=My WinNuxService background service
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/opt/myservice/MyService
+WorkingDirectory=/opt/myservice
+Restart=on-failure
+RestartSec=5
+User=myservice
+Group=myservice
+
+# Logging — captured by journald automatically
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=myservice
+
+# Environment
+Environment=DOTNET_ENVIRONMENT=Production
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> **`Type=notify`** tells systemd to wait for the process to signal readiness before considering
+> the service started. WinNuxService emits this signal automatically via `UseSystemd()`.
+
+**3. Create a dedicated user** (recommended)
+
+```bash
+useradd -r -s /bin/false myservice
+chown -R myservice:myservice /opt/myservice
+```
+
+**4. Enable and start the service**
+
+```bash
+systemctl daemon-reload
+systemctl enable myservice    # start automatically on boot
+systemctl start myservice
+```
+
+**5. Manage and inspect the service**
+
+```bash
+systemctl status myservice    # current status
+systemctl stop myservice      # graceful stop
+systemctl restart myservice   # stop then start
+journalctl -u myservice -f    # follow live logs
+journalctl -u myservice --since "1 hour ago"  # recent logs
+```
+
+> **Logging on Linux:** `journald` captures everything written to stdout/stderr, so
+> `logging.AddConsole()` is sufficient. No file sink required unless you need log rotation outside
+> of journald.
+
+---
+
+### macOS (launchd)
+
+On macOS the application runs as a console process or can be registered with launchd using a
+`.plist` file. For most use cases, running it directly or via a process supervisor such as
+[supervisord](http://supervisord.org) is simpler.
 
 ---
 

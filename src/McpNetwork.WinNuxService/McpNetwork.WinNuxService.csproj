@@ -29,7 +29,7 @@
 	<PropertyGroup>
 		<IsPackable>true</IsPackable>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-		<Version>11.2.1</Version>
+		<Version>11.2.2</Version>
 		<PackageProjectUrl>https://github.com/MichaelIP/McpNetwork.WinNuxService</PackageProjectUrl>
 		<OutputType>Library</OutputType>
 	</PropertyGroup>
@@ -46,6 +46,7 @@
 
 
 	<ItemGroup>
+		<PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.5" />
 		<PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.5" />
 		<PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.5" />
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />

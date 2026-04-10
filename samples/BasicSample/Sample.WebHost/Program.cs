@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Sample.WebHost;
 using System.Diagnostics;
+using System.Net.Http.Headers;
 using System.Runtime.Versioning;
 
 class Program
@@ -36,6 +37,8 @@ class Program
                 logging.AddDebug();
             })
 
+            .UseMiddleware<ProcessingTimeMiddleware>()
+
             .WithWebHost(
                 configureBuilder: builder =>
                 {
@@ -45,6 +48,7 @@ class Program
                 {
                     app.MapGet("/health", () => Results.Ok(new { status = "alive" }));
                     app.MapGet("/info", (WinNuxServiceInfo info) => Results.Ok(info));
+                    app.MapGet("/index", () => Results.Content("<html><head><title>Done</title></head><body><h1>Welcome to WinNuxService Web Demo!</h1></body><html>", "text/html"));
                     app.MapHub<NotificationHub>("/notifications");
                 }
             )

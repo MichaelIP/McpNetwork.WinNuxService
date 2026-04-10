@@ -4,7 +4,7 @@ namespace McpNetwork.WinNuxService.Models;
 
 public class WinNuxServiceHost
 {
-    private readonly IHost _host;
+    internal IHost Host { get; }
 
     public WinNuxServiceInfo Info { get; }
 
@@ -12,7 +12,7 @@ public class WinNuxServiceHost
     /// The application's service provider. Use this to resolve registered services,
     /// or to pass into plugin loading calls.
     /// </summary>
-    public IServiceProvider Services => _host.Services;
+    public IServiceProvider Services => Host.Services;
 
     /// <summary>
     /// Provides runtime plugin management: load, start, stop, reload, unload.
@@ -21,7 +21,7 @@ public class WinNuxServiceHost
 
     internal WinNuxServiceHost(IHost host, WinNuxServiceInfo info)
     {
-        _host = host;
+        Host = host;
         Info = info;
         Plugins = host.Services.GetService(typeof(IPluginManager)) as IPluginManager
             ?? throw new InvalidOperationException("IPluginManager is not registered in the service container.");
@@ -29,13 +29,13 @@ public class WinNuxServiceHost
 
     public WinNuxServiceHost ConfigureServices(Action<IServiceProvider> configure)
     {
-        configure(_host.Services);
+        configure(Host.Services);
         return this;
     }
 
-    public Task RunAsync() => _host.RunAsync();
+    public Task RunAsync() => Host.RunAsync();
 
-    public Task StartAsync() => _host.StartAsync();
+    public Task StartAsync() => Host.StartAsync();
 
-    public Task StopAsync() => _host.StopAsync();
+    public Task StopAsync() => Host.StopAsync();
 }
