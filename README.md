@@ -23,7 +23,9 @@ Compatible with **.NET 10+**.
 * Plugin architecture with startup and runtime loading
 * Dynamic plugin loading at runtime (load, start, stop, reload, unload)
 * Dependency-isolated plugins via `AssemblyLoadContext`
-* Optional plugin hot-reload without restarting the host* Define and access service metadata at startup (`ServiceName`, `Environment`, `Version`, custom properties)
+* Optional plugin hot-reload without restarting the host
+* Named plugin instances with per-instance configuration via `IConfigurablePlugin`
+* Define and access service metadata at startup (`ServiceName`, `Environment`, `Version`, custom properties)
 * **Embedded HTTP server and SignalR support via `WithWebHost()`**
 
 ---
@@ -629,6 +631,79 @@ Reload sequence:
 5. Restart plugin
 
 This enables **live updates in production environments**.
+
+---
+
+## Plugin Configuration and Named Instances
+
+When the same plugin DLL needs to run as multiple independent instances — each with its own
+settings — implement `IConfigurablePlugin` alongside `IWinNuxService`.
+
+### Implementing `IConfigurablePlugin`
+
+```csharp
+public class SensorPlugin : WinNuxServiceBase, IConfigurablePlugin
+{
+    private string _instanceName = string.Empty;
+    private string _endpoint = string.Empty;
+
+    public void Configure(string instanceName, IConfiguration configuration)
+    {
+        _instanceName = instanceName;
+        _endpoint = configuration["Endpoint"]
+            ?? throw new InvalidOperationException("Endpoint not configured");
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            Console.WriteLine($"[{_instanceName}] Polling {_endpoint}");
+            await Task.Delay(TimeSpan.FromSeconds(5), token);
+        }
+    }
+}
+```
+
+### Loading and configuring multiple instances
+
+`ConfigurePlugin` must be called **after** `LoadPlugin` and **before** `StartPlugin`:
+
+```csharp
+var host = WinNuxService
+    .Create()
+    .WithName("SensorHost")
+    .Build();
+
+var config = host.Services.GetRequiredService<IConfiguration>();
+
+// First instance
+var sensorA = host.Plugins.LoadPlugin("plugins/SensorPlugin/SensorPlugin.dll", host.Services);
+host.Plugins.ConfigurePlugin(sensorA, "Sensor-A", config.GetSection("Sensors:A"));
+await host.Plugins.StartPlugin(sensorA);
+
+// Second instance — same DLL, different name and config
+var sensorB = host.Plugins.LoadPlugin("plugins/SensorPlugin/SensorPlugin.dll", host.Services);
+host.Plugins.ConfigurePlugin(sensorB, "Sensor-B", config.GetSection("Sensors:B"));
+await host.Plugins.StartPlugin(sensorB);
+
+await host.RunAsync();
+```
+
+### Inspecting instance names at runtime
+
+`LoadedPlugin.InstanceName` is populated by `ConfigurePlugin` and available on every entry
+returned by `IPluginManager.Plugins`:
+
+```csharp
+foreach (var plugin in host.Plugins.Plugins)
+{
+    Console.WriteLine($"{plugin.Name} / {plugin.InstanceName ?? "(no instance name)"} — {plugin.State}");
+}
+```
+
+> **Note:** plugins that do not implement `IConfigurablePlugin` are completely unaffected.
+> `ConfigurePlugin` is a no-op for them and can safely be omitted.
 
 ---
 

@@ -60,13 +60,26 @@ public class PluginManager : IPluginManager
         return plugin;
     }
 
+    /// <inheritdoc />
+    public void ConfigurePlugin(LoadedPlugin plugin, string instanceName, IConfiguration configuration)
+    {
+        EnsureNotUnloaded(plugin);
+
+        plugin.InstanceName = instanceName;
+
+        if (plugin.Instance is IConfigurablePlugin configurable)
+            configurable.Configure(instanceName, configuration);
+
+        _logger?.LogInformation("Plugin '{Name}' configured as instance '{InstanceName}'", plugin.Name, instanceName);
+    }
+
     /// <summary>
     /// Loads the assembly from disk and resolves the IWinNuxService implementation type.
     /// Override in tests to skip real DLL loading entirely.
     /// </summary>
     protected virtual (PluginLoadContext context, Assembly assembly, Type serviceType) LoadAssembly(string fullPath)
     {
-        var context = new PluginLoadContext(fullPath);
+        var context = new PluginLoadContext(fullPath, _logger);
         var assembly = context.LoadFromAssemblyPath(fullPath);
 
         var serviceType = assembly

@@ -6,10 +6,12 @@ namespace McpNetwork.WinNuxService.Plugins;
 public class PluginLoadContext : AssemblyLoadContext
 {
     private readonly AssemblyDependencyResolver _resolver;
+    private readonly ILogger? _logger;
 
-    public PluginLoadContext(string pluginPath) : base(isCollectible: true)
+    public PluginLoadContext(string pluginPath, ILogger? logger = null) : base(isCollectible: true)
     {
         _resolver = new AssemblyDependencyResolver(pluginPath);
+        _logger = logger;
     }
 
     protected override Assembly? Load(AssemblyName assemblyName)
@@ -18,11 +20,11 @@ public class PluginLoadContext : AssemblyLoadContext
 
         if (path != null)
         {
-            Console.WriteLine($"[PLUGIN LOAD] {assemblyName} -> {path}");
+            _logger?.LogDebug($"[PLUGIN LOAD] {assemblyName} -> {path}");
             return LoadFromAssemblyPath(path);
         }
 
-        Console.WriteLine($"[PLUGIN FALLBACK] {assemblyName}");
+        _logger?.LogDebug($"[PLUGIN FALLBACK] {assemblyName}");
 
         return null;
     }

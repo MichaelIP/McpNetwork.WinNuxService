@@ -1,7 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-
-namespace McpNetwork.WinNuxService.Interfaces;
+﻿namespace McpNetwork.WinNuxService.Interfaces;
 
 public interface IWinNuxPlugin
 {

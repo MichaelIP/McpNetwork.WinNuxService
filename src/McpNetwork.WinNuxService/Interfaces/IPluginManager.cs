@@ -16,6 +16,13 @@ public interface IPluginManager
     LoadedPlugin LoadPlugin(string path, IServiceProvider services);
 
     /// <summary>
+    /// Configures a loaded plugin with a logical instance name and a configuration section.
+    /// Only has an effect if the plugin implements <see cref="IConfigurablePlugin"/>.
+    /// Must be called after <see cref="LoadPlugin"/> and before <see cref="StartPlugin"/>.
+    /// </summary>
+    void ConfigurePlugin(LoadedPlugin plugin, string instanceName, IConfiguration configuration);
+
+    /// <summary>
     /// Starts a previously loaded plugin.
     /// </summary>
     Task StartPlugin(LoadedPlugin plugin);
