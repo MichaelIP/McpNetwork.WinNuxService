@@ -705,6 +705,22 @@ foreach (var plugin in host.Plugins.Plugins)
 > **Note:** plugins that do not implement `IConfigurablePlugin` are completely unaffected.
 > `ConfigurePlugin` is a no-op for them and can safely be omitted.
 
+### A note on `LoadedPlugin.Instance` visibility
+
+`LoadedPlugin.Instance` has a `public` getter and an `internal` setter — a deliberate asymmetry
+worth explaining.
+
+Originally the property was fully `internal`, because the library was designed to manage plugin
+instances autonomously and the host had no reason to touch them directly. The introduction of
+`IConfigurablePlugin` changed that: the host now has a legitimate need to reach the instance
+between `LoadPlugin` and `StartPlugin` in order to call `Configure` on it. That is a normal part
+of the plugin lifecycle that the original design didn't anticipate.
+
+Rather than working around it with reflection or adding domain-specific concepts to `IPluginManager`,
+the right fix is to open just the getter. The host can read the instance to configure it, but only
+`WinNuxService` internals can ever assign it. The encapsulation that matters — who creates and owns
+the instance — is fully preserved.
+
 ---
 
 ## Platform Support

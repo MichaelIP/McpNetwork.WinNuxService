@@ -30,6 +30,6 @@ public class LoadedPlugin
 
     internal PluginLoadContext Context { get; init; } = null!;
     internal Assembly Assembly { get; init; } = null!;
-    internal IWinNuxService? Instance { get; set; }
+    public IWinNuxService? Instance { get; internal set; }
     internal CancellationTokenSource Cancellation { get; set; } = new();
 }
