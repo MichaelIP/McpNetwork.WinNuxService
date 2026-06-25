@@ -17,16 +17,15 @@ public class LoadedPlugin
     public string Name { get; internal set; } = string.Empty;
 
     /// <summary>
-    /// Logical instance name assigned by <see cref="IPluginManager.ConfigurePlugin"/>.
-    /// Null until ConfigurePlugin is called. Useful when the same DLL is loaded
-    /// more than once and each instance needs a distinct identity.
-    /// </summary>
-    public string? InstanceName { get; internal set; }
-
-    /// <summary>
     /// Current lifecycle state of the plugin.
     /// </summary>
     public PluginState State { get; internal set; } = PluginState.Loaded;
+
+    /// <summary>
+    /// Logical instance name assigned via <see cref="IPluginManager.ConfigurePlugin"/>.
+    /// Empty until ConfigurePlugin is called.
+    /// </summary>
+    public string InstanceName { get; internal set; } = string.Empty;
 
     internal PluginLoadContext Context { get; init; } = null!;
     internal Assembly Assembly { get; init; } = null!;

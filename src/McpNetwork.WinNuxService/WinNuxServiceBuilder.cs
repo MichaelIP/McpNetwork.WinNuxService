@@ -15,6 +15,7 @@ public class WinNuxServiceBuilder
     private readonly List<Assembly> _pluginAssemblies = new();
     private readonly List<PluginLoadContext> _pluginContexts = new();
     private readonly List<Action<WebApplication>> _middlewares = new();
+    private readonly List<string> _preRegisterPluginPaths = new();
 
     private Action<ILoggingBuilder>? _configureLogging;
     private Action<HostBuilderContext, IServiceCollection>? _configureServices;
@@ -112,6 +113,29 @@ public class WinNuxServiceBuilder
         var assembly = loadContext.LoadFromAssemblyPath(fullPath);
         _pluginAssemblies.Add(assembly);
 
+        return this;
+    }
+
+    /// <summary>
+    /// Registers any services declared by <see cref="IWinNuxPlugin"/> implementations
+    /// found in the plugin DLL into the DI container before <c>Build()</c> is called.
+    /// <para>
+    /// Use this when plugins are loaded dynamically at runtime via
+    /// <see cref="IPluginManager.LoadPlugin"/> — that post-build path cannot call
+    /// <see cref="IWinNuxPlugin.ConfigureServices"/> itself because the container is
+    /// already built. Calling this method during the builder phase ensures those
+    /// registrations are present before the container is sealed.
+    /// </para>
+    /// </summary>
+    /// <param name="pluginDllPath">Absolute or relative path to the plugin DLL.</param>
+    public WinNuxServiceBuilder RegisterPluginServices(string pluginDllPath)
+    {
+        var fullPath = Path.GetFullPath(pluginDllPath);
+
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"Plugin not found: {fullPath}");
+
+        _preRegisterPluginPaths.Add(fullPath);
         return this;
     }
 
@@ -270,6 +294,15 @@ public class WinNuxServiceBuilder
         services.AddSingleton<IPluginManager>(sp => sp.GetRequiredService<PluginManager>());
         services.AddSingleton(info);
 
+        // Pre-build plugin service registration — honours IWinNuxPlugin.ConfigureServices
+        // for plugins that will be loaded at runtime via IPluginManager.LoadPlugin.
+        if (_preRegisterPluginPaths.Count > 0)
+        {
+            var tempManager = new PluginManager();
+            foreach (var path in _preRegisterPluginPaths)
+                tempManager.RegisterPluginServices(path, ctx, services);
+        }
+
         // Register workers
         foreach (var worker in _workers)
         {
@@ -336,7 +369,7 @@ public class WinNuxServiceBuilder
 
         builder.Host.UseWindowsService();
         builder.Host.UseSystemd();
-       
+
         // Same core services — plugins, workers, metadata
         builder.Host.ConfigureServices((ctx, services) => ConfigureCommonServices(ctx, services, info));
         builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));

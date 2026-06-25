@@ -25,6 +25,7 @@ Compatible with **.NET 10+**.
 * Dependency-isolated plugins via `AssemblyLoadContext`
 * Optional plugin hot-reload without restarting the host
 * Named plugin instances with per-instance configuration via `IConfigurablePlugin`
+* Pre-build plugin service registration via `RegisterPluginServices()` for runtime-loaded plugins
 * Define and access service metadata at startup (`ServiceName`, `Environment`, `Version`, custom properties)
 * **Embedded HTTP server and SignalR support via `WithWebHost()`**
 
@@ -634,6 +635,89 @@ This enables **live updates in production environments**.
 
 ---
 
+## Post-Build Plugin Loading and DI Registration
+
+Plugins are sometimes loaded dynamically at runtime — after `Build()` — based on conditions that
+are only known at startup (folder presence, configuration, feature flags, etc.). This is done via
+`IPluginManager.LoadPlugin`, called inside `host.ConfigureServices(sp => ...)`.
+
+The problem: by the time `LoadPlugin` runs, the DI container is already built. Any services that
+the plugin registers via `IWinNuxPlugin.ConfigureServices` would be silently skipped, causing
+`InvalidOperationException` failures when the plugin tries to resolve them in `OnStartAsync`.
+
+### The fix: `RegisterPluginServices`
+
+`WinNuxServiceBuilder.RegisterPluginServices(path)` solves this with a two-phase contract:
+
+* **Builder phase** — `RegisterPluginServices` loads the plugin DLL into a short-lived collectible
+  `AssemblyLoadContext`, finds all `IWinNuxPlugin` implementations, calls `ConfigureServices` on
+  each, then immediately unloads the context. The DI registrations are in the container before
+  `Build()` seals it.
+* **Runtime phase** — `IPluginManager.LoadPlugin` loads the plugin's real `PluginLoadContext`,
+  instantiates the service, and starts it as usual. The services it depends on are already
+  registered.
+
+### Usage pattern
+
+```csharp
+var host = WinNuxService
+    .Create()
+    .WithName("MyService")
+    .RegisterPluginServices("plugins/MyPlugin/MyPlugin.dll")  // builder phase — DI registered
+    .Build();
+
+host.ConfigureServices(sp =>
+{
+    var pm = sp.GetRequiredService<IPluginManager>();
+    var config = sp.GetRequiredService<IConfiguration>();
+
+    var loaded = pm.LoadPlugin("plugins/MyPlugin/MyPlugin.dll", sp);  // runtime load
+
+    // Instance is public — no reflection needed
+    if (loaded.Instance is IConfigurablePlugin configurable)
+        configurable.Configure("MyPlugin", config.GetSection("Plugins:MyPlugin"));
+
+    pm.StartPlugin(loaded).GetAwaiter().GetResult();
+});
+
+await host.RunAsync();
+```
+
+### Multiple plugins from a folder
+
+```csharp
+var builder = WinNuxService.Create().WithName("PluginHost");
+
+foreach (var dll in Directory.GetFiles("plugins", "*.dll", SearchOption.AllDirectories))
+    builder.RegisterPluginServices(dll);  // register all DI contributions before Build()
+
+var host = builder.Build();
+
+host.ConfigureServices(sp =>
+{
+    var pm = sp.GetRequiredService<IPluginManager>();
+
+    foreach (var dll in Directory.GetFiles("plugins", "*.dll", SearchOption.AllDirectories))
+    {
+        var loaded = pm.LoadPlugin(dll, sp);
+        pm.StartPlugin(loaded).GetAwaiter().GetResult();
+    }
+});
+
+await host.RunAsync();
+```
+
+> **`RegisterPluginServices` is safe to call even for plugins that have no `IWinNuxPlugin`
+> implementation** — it simply finds nothing and returns. You can call it unconditionally for every
+> DLL in a plugin folder without inspecting the assemblies first.
+
+> **Type identity:** services registered in the builder phase are resolved from the host's
+> `AssemblyLoadContext`. Plugin-internal types (repository classes, etc.) should be instantiated
+> directly inside the plugin rather than registered in the shared DI container, to avoid type
+> identity mismatches across load contexts.
+
+---
+
 ## Plugin Configuration and Named Instances
 
 When the same plugin DLL needs to run as multiple independent instances — each with its own
@@ -667,12 +751,15 @@ public class SensorPlugin : WinNuxServiceBase, IConfigurablePlugin
 
 ### Loading and configuring multiple instances
 
-`ConfigurePlugin` must be called **after** `LoadPlugin` and **before** `StartPlugin`:
+`ConfigurePlugin` must be called **after** `LoadPlugin` and **before** `StartPlugin`. If the
+plugin registers its own services via `IWinNuxPlugin`, also call `RegisterPluginServices` during
+the builder phase so those registrations are available when the plugin starts:
 
 ```csharp
 var host = WinNuxService
     .Create()
     .WithName("SensorHost")
+    .RegisterPluginServices("plugins/SensorPlugin/SensorPlugin.dll")  // DI registration phase
     .Build();
 
 var config = host.Services.GetRequiredService<IConfiguration>();

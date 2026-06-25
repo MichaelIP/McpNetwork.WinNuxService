@@ -72,6 +72,50 @@ public class PluginManager : IPluginManager
     }
 
     /// <summary>
+    /// Registers any services declared by <see cref="IWinNuxPlugin"/> implementations
+    /// found in the plugin DLL into <paramref name="services"/>.
+    /// Must be called during the builder phase, before <c>Build()</c>, via
+    /// <see cref="WinNuxServiceBuilder.RegisterPluginServices"/>.
+    /// </summary>
+    internal void RegisterPluginServices(string path, HostBuilderContext context, IServiceCollection services)
+    {
+        var fullPath = Path.GetFullPath(path);
+
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"Plugin DLL not found: {fullPath}");
+
+        _logger?.LogInformation("Registering plugin services from {Path}", fullPath);
+
+        // Short-lived collectible context — used only to call ConfigureServices,
+        // then immediately unloaded before the real runtime PluginLoadContext is created.
+        var tempContext = new PluginLoadContext(fullPath);
+        try
+        {
+            var assembly = tempContext.LoadFromAssemblyPath(fullPath);
+
+            var pluginTypes = assembly
+                .GetTypes()
+                .Where(t =>
+                    typeof(IWinNuxPlugin).IsAssignableFrom(t) &&
+                    !t.IsAbstract &&
+                    !t.IsInterface);
+
+            foreach (var type in pluginTypes)
+            {
+                var plugin = (IWinNuxPlugin)Activator.CreateInstance(type)!;
+                plugin.ConfigureServices(context, services);
+                _logger?.LogInformation("Registered services from plugin type '{Type}'", type.Name);
+            }
+        }
+        finally
+        {
+            tempContext.Unload();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+    }
+
+    /// <summary>
     /// Loads the assembly from disk and resolves the IWinNuxService implementation type.
     /// Override in tests to skip real DLL loading entirely.
     /// </summary>
