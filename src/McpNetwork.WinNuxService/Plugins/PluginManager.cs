@@ -93,17 +93,24 @@ public class PluginManager : IPluginManager
         {
             var assembly = tempContext.LoadFromAssemblyPath(fullPath);
 
+            // Compare by full name, not type identity: the plugin assembly was loaded into
+            // its own AssemblyLoadContext and carries its own copy of IWinNuxPlugin, so
+            // typeof(IWinNuxPlugin).IsAssignableFrom(t) would always return false here.
+            var winNuxPluginFullName = typeof(IWinNuxPlugin).FullName;
+
             var pluginTypes = assembly
                 .GetTypes()
                 .Where(t =>
-                    typeof(IWinNuxPlugin).IsAssignableFrom(t) &&
+                    t.GetInterfaces().Any(i => i.FullName == winNuxPluginFullName) &&
                     !t.IsAbstract &&
                     !t.IsInterface);
 
             foreach (var type in pluginTypes)
             {
-                var plugin = (IWinNuxPlugin)Activator.CreateInstance(type)!;
-                plugin.ConfigureServices(context, services);
+                // Can't cast across load contexts either — invoke via reflection.
+                var plugin = Activator.CreateInstance(type)!;
+                var method = type.GetMethod(nameof(IWinNuxPlugin.ConfigureServices));
+                method?.Invoke(plugin, new object[] { context, services });
                 _logger?.LogInformation("Registered services from plugin type '{Type}'", type.Name);
             }
         }
@@ -124,10 +131,16 @@ public class PluginManager : IPluginManager
         var context = new PluginLoadContext(fullPath, _logger);
         var assembly = context.LoadFromAssemblyPath(fullPath);
 
+        // Compare by full name, not type identity: the plugin assembly is loaded into
+        // its own PluginLoadContext and carries its own copy of IWinNuxService, so
+        // typeof(IWinNuxService).IsAssignableFrom(t) is always false here — it would
+        // throw "no type found" even for a perfectly valid plugin.
+        var winNuxServiceFullName = typeof(IWinNuxService).FullName;
+
         var serviceType = assembly
             .GetTypes()
             .FirstOrDefault(t =>
-                typeof(IWinNuxService).IsAssignableFrom(t) &&
+                t.GetInterfaces().Any(i => i.FullName == winNuxServiceFullName) &&
                 !t.IsAbstract &&
                 !t.IsInterface)
             ?? throw new InvalidOperationException(
@@ -140,8 +153,24 @@ public class PluginManager : IPluginManager
     /// Factory method that creates a plugin service instance.
     /// Override in tests to inject mocks without loading a real assembly.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="serviceType"/> usually comes from a separate
+    /// <see cref="PluginLoadContext"/> and therefore carries its own copy of
+    /// <see cref="IWinNuxService"/> — a direct <c>(IWinNuxService)</c> cast would throw
+    /// <see cref="InvalidCastException"/> even though the instance genuinely implements
+    /// the (source-identical) interface. When the instance isn't already assignable —
+    /// i.e. it's a real cross-context plugin rather than a same-context test mock — it's
+    /// wrapped in a <see cref="PluginInstanceProxy"/> that forwards calls by reflection.
+    /// </remarks>
     protected virtual IWinNuxService CreateInstance(IServiceProvider services, Type serviceType)
-        => (IWinNuxService)ActivatorUtilities.CreateInstance(services, serviceType);
+    {
+        var instance = ActivatorUtilities.CreateInstance(services, serviceType);
+
+        if (instance is IWinNuxService direct)
+            return direct;
+
+        return new PluginInstanceProxy(instance, serviceType);
+    }
 
     /// <inheritdoc />
     public async Task StartPlugin(LoadedPlugin plugin)

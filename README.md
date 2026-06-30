@@ -715,6 +715,15 @@ await host.RunAsync();
 > `AssemblyLoadContext`. Plugin-internal types (repository classes, etc.) should be instantiated
 > directly inside the plugin rather than registered in the shared DI container, to avoid type
 > identity mismatches across load contexts.
+>
+> `IWinNuxService` and `IConfigurablePlugin` themselves have the same cross-context identity problem,
+> but you don't need to do anything about it — the library detects it and forwards calls through an
+> internal reflection-based proxy automatically. The one place this can still surface is
+> `IConfigurablePlugin.Configure(string, IConfiguration)`: if a plugin bundles its own private copy
+> of `Microsoft.Extensions.Configuration.Abstractions` instead of resolving it back to the shared
+> copy, the `IConfiguration` parameter type itself can suffer the same mismatch, which would surface
+> as a `TargetInvocationException` from `Configure`. Avoid bundling that package privately with your
+> plugin if you implement `IConfigurablePlugin`.
 
 ---
 
@@ -807,6 +816,18 @@ Rather than working around it with reflection or adding domain-specific concepts
 the right fix is to open just the getter. The host can read the instance to configure it, but only
 `WinNuxService` internals can ever assign it. The encapsulation that matters — who creates and owns
 the instance — is fully preserved.
+
+> **Implementation note:** the property-visibility fix above is unrelated to a separate, lower-level
+> problem: a plugin DLL loaded into its own `AssemblyLoadContext` carries its own copy of
+> `IWinNuxService` / `IConfigurablePlugin` — a different runtime `Type` than the host's, even though
+> the source is identical. A direct `(IWinNuxService)` cast across that boundary throws
+> `InvalidCastException`. To make `Instance` usable anyway, the library *does* fall back to a small
+> internal reflection-forwarding proxy when a direct cast isn't possible, so `Instance.OnStartAsync(...)`,
+> `Instance.OnStopAsync(...)`, and `Instance is IConfigurablePlugin` keep working as documented. That
+> proxy only implements `IWinNuxService` and `IConfigurablePlugin` — if your plugin implements some
+> additional custom interface, casting `Instance` to it will return `null` for externally-loaded
+> plugins, even though the underlying object really does implement it. Access any plugin-specific
+> members from inside the plugin itself, not through `Instance`.
 
 ---
 
